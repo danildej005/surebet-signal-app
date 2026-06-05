@@ -1,0 +1,45 @@
+{
+  "name": "surebet-signal-app",
+  "version": "0.1.0",
+  "description": "Surebet Signal — следит за вилками surebet.com (Pinnacle) и шлёт сигналы в Telegram.",
+  "main": "main.cjs",
+  "author": "",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "dist": "electron-builder --win --x64 --publish never",
+    "release": "electron-builder --win --x64 --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.surebet.signal",
+    "productName": "Surebet Signal",
+    "directories": { "output": "release", "buildResources": "build" },
+    "files": ["main.cjs", "preload-control.cjs", "preload-surebet.cjs", "lib/**/*", "renderer/**/*", "build/icon.*"],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Surebet Signal"
+    },
+    "publish": [{
+      "provider": "github",
+      "owner": "danildej005",
+      "repo": "surebet-signal-app"
+    }]
+  }
+}

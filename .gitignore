@@ -1,0 +1,8 @@
+node_modules/
+release/
+*.log
+smoke.log
+.DS_Store
+# локальные данные/секреты — в git НИКОГДА
+settings.enc
+seen.json

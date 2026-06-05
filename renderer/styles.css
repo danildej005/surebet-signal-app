@@ -1,0 +1,29 @@
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  margin: 0; padding: 16px; background: #f4f5f7; color: #1c1e21;
+}
+h1 { font-size: 20px; margin: 0 0 12px; }
+h2 { font-size: 14px; margin: 0 0 8px; }
+.card { background: #fff; border: 1px solid #e3e5e8; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+.row { display: flex; align-items: center; gap: 10px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.muted { color: #6b7280; font-size: 12px; margin-top: 6px; }
+.err { color: #c0392b; font-size: 12px; margin-top: 6px; min-height: 14px; }
+label { display: block; font-size: 12px; color: #444; margin-top: 8px; }
+input { width: 100%; padding: 8px; border: 1px solid #cfd2d6; border-radius: 8px; font-size: 13px; margin-top: 4px; background: #fff; color: #111; }
+button { padding: 8px 14px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font-size: 13px; cursor: pointer; }
+button.ghost { background: #e5e7eb; color: #111; }
+button:hover { filter: brightness(0.96); }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: #9ca3af; display: inline-block; }
+.dot.on { background: #16a34a; }
+.dot.warn { background: #f59e0b; }
+.dot.pause { background: #9ca3af; }
+@media (prefers-color-scheme: dark) {
+  body { background: #1f2125; color: #e5e7eb; }
+  .card { background: #2a2d31; border-color: #3a3d42; }
+  input { background: #1f2125; color: #e5e7eb; border-color: #3a3d42; }
+  button.ghost { background: #3a3d42; color: #e5e7eb; }
+  label { color: #b6bcc4; }
+}
