@@ -15,6 +15,7 @@ function renderStatus(s) {
   $("lastError").textContent = s.lastError ? "⚠️ " + s.lastError : "";
   if (s.settings) {
     if (s.settings.tgChat && !$("tgChat").value) $("tgChat").value = s.settings.tgChat;
+    if (s.settings.tgApiBase && document.activeElement !== $("tgApiBase")) $("tgApiBase").value = s.settings.tgApiBase;
     if (s.settings.keyword && document.activeElement !== $("keyword")) $("keyword").value = s.settings.keyword;
     if (s.settings.pollMs && document.activeElement !== $("pollSec")) $("pollSec").value = Math.round(s.settings.pollMs / 1000);
     if (s.settings.hasToken && !$("tgToken").placeholder.includes("сохранён"))
@@ -43,6 +44,7 @@ $("save").onclick = async () => {
   const patch = {
     tgToken: $("tgToken").value.trim(),
     tgChat: $("tgChat").value.trim(),
+    tgApiBase: $("tgApiBase").value.trim() || "https://api.telegram.org",
     pollMs: Math.max(3, Number($("pollSec").value) || 8) * 1000,
     keyword: $("keyword").value.trim().toLowerCase() || "pinnacle",
   };

@@ -124,6 +124,7 @@ function maskedSettings() {
   return {
     tgToken: settings.tgToken ? settings.tgToken.slice(0, 6) + "…" : "",
     tgChat: settings.tgChat || "",
+    tgApiBase: settings.tgApiBase || "https://api.telegram.org",
     pollMs: settings.pollMs,
     keyword: settings.keyword,
     hasToken: !!settings.tgToken,
@@ -136,12 +137,17 @@ function setRunning(v) {
   pushStatus();
 }
 
+// ── Telegram (через прокси-базу из настроек) ──────────────────────────────────
+function tg(text) {
+  return sendTelegram(settings.tgToken, settings.tgChat, text, { apiBase: settings.tgApiBase });
+}
+
 // ── цикл слежения ─────────────────────────────────────────────────────────────
 async function watchdog(text) {
   const now = Date.now();
   if (now - lastWatchdogAt < 15 * 60 * 1000) return;
   lastWatchdogAt = now;
-  if (settings.tgToken && settings.tgChat) await sendTelegram(settings.tgToken, settings.tgChat, text);
+  if (settings.tgToken && settings.tgChat) await tg(text);
 }
 
 async function tick() {
@@ -162,7 +168,7 @@ async function tick() {
 
   if (settings.tgToken && settings.tgChat && !startupSent) {
     startupSent = true;
-    await sendTelegram(settings.tgToken, settings.tgChat, "🟢 Surebet Signal запущен. Слежу за вилками с Pinnacle.");
+    await tg("🟢 Surebet Signal запущен. Слежу за вилками с Pinnacle.");
   }
 
   const arbs = parseSurebets(r.html);
@@ -173,9 +179,9 @@ async function tick() {
   for (const s of wanted) {
     if (!dedupe.shouldSend(s.id)) continue;
     if (!settings.tgToken || !settings.tgChat) break; // некуда слать
-    const res = await sendTelegram(settings.tgToken, settings.tgChat, formatSignal(s, settings.keyword));
+    const res = await tg(formatSignal(s, settings.keyword));
     if (res.ok) { dedupe.markSent(s.id); status.sent++; status.lastSignal = { event: s.event, profit: s.profitPct, at: Date.now() }; }
-    else status.lastError = "Telegram: " + res.error;
+    else { status.lastError = "Telegram: " + res.error; logger.log("WARN", "Telegram send:", res.error); }
   }
   pushStatus();
 }
@@ -196,7 +202,7 @@ function initAutoUpdate() {
     autoUpdater.on("update-downloaded", (i) => {
       logger.log("UPD", "обновление загружено", i && i.version);
       if (settings && settings.tgToken && settings.tgChat)
-        sendTelegram(settings.tgToken, settings.tgChat, "⬆️ Обновление загружено, установится при следующем запуске.");
+        tg("⬆️ Обновление загружено, установится при следующем запуске.");
     });
     autoUpdater.on("error", (e) => logger.log("UPD-ERR", e));
     autoUpdater.checkForUpdatesAndNotify().catch((e) => logger.log("UPD-ERR", e));
@@ -210,6 +216,7 @@ ipcMain.handle("save-settings", (_e, patch) => {
   const clean = {};
   if (typeof patch.tgToken === "string" && patch.tgToken.trim()) clean.tgToken = patch.tgToken.trim();
   if (typeof patch.tgChat === "string") clean.tgChat = patch.tgChat.trim();
+  if (typeof patch.tgApiBase === "string") clean.tgApiBase = patch.tgApiBase.trim() || "https://api.telegram.org";
   if (patch.pollMs) clean.pollMs = Math.max(3000, Number(patch.pollMs) || 8000);
   if (patch.keyword) clean.keyword = String(patch.keyword).trim().toLowerCase();
   settings = settingsStore.save(clean);
@@ -222,7 +229,9 @@ ipcMain.handle("open-surebet", () => { if (surebetWin) { surebetWin.show(); sure
 ipcMain.handle("set-running", (_e, v) => { setRunning(!!v); return running; });
 ipcMain.handle("test-telegram", async () => {
   if (!settings.tgToken || !settings.tgChat) return { ok: false, error: "не заданы токен/chat_id" };
-  return await sendTelegram(settings.tgToken, settings.tgChat, "✅ Проверка: Surebet Signal на связи.");
+  const res = await tg("✅ Проверка: Surebet Signal на связи.");
+  logger.log(res.ok ? "INFO" : "WARN", "тест Telegram:", res.ok ? "ok" : res.error, "| база:", settings.tgApiBase);
+  return res;
 });
 ipcMain.handle("logout-surebet", async () => {
   try { await session.fromPartition(PARTITION).clearStorageData(); if (surebetWin) surebetWin.loadURL(SUREBET_URL); return { ok: true }; }
