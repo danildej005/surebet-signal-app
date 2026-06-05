@@ -8,5 +8,6 @@ contextBridge.exposeInMainWorld("api", {
   setRunning: (v) => ipcRenderer.invoke("set-running", v),
   testTelegram: () => ipcRenderer.invoke("test-telegram"),
   logoutSurebet: () => ipcRenderer.invoke("logout-surebet"),
+  openLogs: () => ipcRenderer.invoke("open-logs"),
   onStatus: (cb) => ipcRenderer.on("status", (_e, s) => cb(s)),
 });

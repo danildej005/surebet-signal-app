@@ -5,6 +5,7 @@
 const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, shell, session } = require("electron");
 const { join } = require("node:path");
 
+const logger = require("./lib/logger.cjs");
 const { parseSurebets } = require("./lib/parse.cjs");
 const { pickWanted } = require("./lib/filter.cjs");
 const { formatSignal } = require("./lib/format.cjs");
@@ -53,6 +54,14 @@ function createSurebetWindow() {
   surebetWin.on("close", (e) => {
     // не закрываем приложение — прячем окно (работа продолжается в фоне)
     if (!app.isQuitting) { e.preventDefault(); surebetWin.hide(); }
+  });
+  // самовосстановление: если страница surebet упала — перезагружаем
+  surebetWin.webContents.on("render-process-gone", (_e, d) => {
+    logger.log("ERROR", "surebet render-process-gone:", d && d.reason);
+    try { surebetWin.loadURL(SUREBET_URL); } catch (e) { logger.log("ERROR", "reload after crash:", e); }
+  });
+  surebetWin.webContents.on("did-fail-load", (_e, code, desc, url) => {
+    if (code !== -3) logger.log("WARN", `surebet did-fail-load ${code} ${desc} ${url}`);
   });
 }
 
@@ -140,7 +149,7 @@ async function tick() {
   const r = await readSurebet(surebetWin.webContents);
   status.lastCheck = Date.now();
 
-  if (r.error) { status.lastError = r.error; pushStatus(); return; }
+  if (r.error) { status.lastError = r.error; logger.log("WARN", "чтение surebet:", r.error); pushStatus(); return; }
   status.lastError = null;
 
   if (r.loggedOut) {
@@ -173,7 +182,7 @@ async function tick() {
 
 function startLoop() {
   if (timer) clearInterval(timer);
-  timer = setInterval(() => { tick().catch((e) => { status.lastError = e.message; }); }, Math.max(3000, settings.pollMs || 8000));
+  timer = setInterval(() => { tick().catch((e) => { status.lastError = e.message; logger.log("ERROR", "tick:", e); }); }, Math.max(3000, settings.pollMs || 8000));
 }
 
 // ── авто-обновление ───────────────────────────────────────────────────────────
@@ -182,13 +191,17 @@ function initAutoUpdate() {
   try {
     const { autoUpdater } = require("electron-updater");
     autoUpdater.autoDownload = true;
-    autoUpdater.on("update-downloaded", () => {
-      if (settings.tgToken && settings.tgChat)
+    autoUpdater.logger = { info: (m) => logger.log("UPD", m), warn: (m) => logger.log("UPD", m), error: (m) => logger.log("UPD-ERR", m), debug: () => {} };
+    autoUpdater.on("update-available", (i) => logger.log("UPD", "доступно обновление", i && i.version));
+    autoUpdater.on("update-downloaded", (i) => {
+      logger.log("UPD", "обновление загружено", i && i.version);
+      if (settings && settings.tgToken && settings.tgChat)
         sendTelegram(settings.tgToken, settings.tgChat, "⬆️ Обновление загружено, установится при следующем запуске.");
     });
-    autoUpdater.checkForUpdatesAndNotify().catch(() => {});
-    setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 6 * 60 * 60 * 1000);
-  } catch (e) { console.error("[update]", e.message); }
+    autoUpdater.on("error", (e) => logger.log("UPD-ERR", e));
+    autoUpdater.checkForUpdatesAndNotify().catch((e) => logger.log("UPD-ERR", e));
+    setInterval(() => autoUpdater.checkForUpdates().catch((e) => logger.log("UPD-ERR", e)), 6 * 60 * 60 * 1000);
+  } catch (e) { logger.log("UPD-ERR", e); }
 }
 
 // ── IPC ───────────────────────────────────────────────────────────────────────
@@ -215,6 +228,11 @@ ipcMain.handle("logout-surebet", async () => {
   try { await session.fromPartition(PARTITION).clearStorageData(); if (surebetWin) surebetWin.loadURL(SUREBET_URL); return { ok: true }; }
   catch (e) { return { ok: false, error: e.message }; }
 });
+ipcMain.handle("open-logs", async () => {
+  const d = logger.dir();
+  if (d) await shell.openPath(d);
+  return { ok: !!d, dir: d };
+});
 
 // ── запуск ────────────────────────────────────────────────────────────────────
 const gotLock = app.requestSingleInstanceLock();
@@ -224,14 +242,20 @@ if (!gotLock) {
   app.on("second-instance", () => { if (surebetWin) { surebetWin.show(); surebetWin.focus(); } });
 
   app.whenReady().then(() => {
-    settings = settingsStore.load();
-    dedupe = makeDeduper({ ttlMs: settings.dedupeTtlMs, file: join(app.getPath("userData"), "seen.json") });
+    logger.init();
+    initAutoUpdate(); // проверку обновлений запускаем ПЕРВОЙ — чтобы баг-версия успевала подтянуть фикс
 
-    createSurebetWindow();
-    createTray();
-    if (!settings.tgToken || !settings.tgChat) createPanelWindow(); // первый запуск — покажем настройки
-    startLoop();
-    initAutoUpdate();
+    try {
+      settings = settingsStore.load();
+      dedupe = makeDeduper({ ttlMs: settings.dedupeTtlMs, file: join(app.getPath("userData"), "seen.json") });
+
+      createSurebetWindow();
+      createTray();
+      if (!settings.tgToken || !settings.tgChat) createPanelWindow(); // первый запуск — покажем настройки
+      startLoop();
+    } catch (e) {
+      logger.log("FATAL", "ошибка инициализации:", e);
+    }
 
     app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createSurebetWindow(); });
   });

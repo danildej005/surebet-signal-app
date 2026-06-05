@@ -27,6 +27,7 @@ async function refresh() { renderStatus(await window.api.getStatus()); }
 window.api.onStatus(renderStatus);
 
 $("openSurebet").onclick = () => window.api.openSurebet();
+$("openLogs").onclick = () => window.api.openLogs();
 $("logout").onclick = async () => { await window.api.logoutSurebet(); };
 $("toggleRun").onclick = async () => {
   const s = await window.api.getStatus();
