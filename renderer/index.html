@@ -31,9 +31,15 @@
     <label>chat_id
       <input id="tgChat" type="text" placeholder="427664096" inputmode="numeric" />
     </label>
-    <label>Telegram API (прокси, если провайдер режет Telegram)
-      <input id="tgApiBase" type="text" placeholder="https://api.telegram.org" />
+    <label>Прокси для Telegram (если провайдер режет Telegram)
+      <input id="proxy" type="text" placeholder="host:port  или  host:port:логин:пароль" />
     </label>
+    <details>
+      <summary class="muted">Доп.: свой Telegram API (Cloudflare Worker)</summary>
+      <label>Адрес API
+        <input id="tgApiBase" type="text" placeholder="https://api.telegram.org" />
+      </label>
+    </details>
     <div class="grid2">
       <label>Опрос, сек<input id="pollSec" type="number" min="3" value="8" /></label>
       <label>Ключевое слово<input id="keyword" type="text" value="pinnacle" /></label>
