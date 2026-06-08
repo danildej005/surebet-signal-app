@@ -299,17 +299,18 @@ const BOOKER_SUMMARY_JS = `(() => {
     '\\n\\n=== КНОПКИ (' + btns.length + ') ===\\n' + btns.join('\\n');
 })()`;
 
-async function captureBooker() {
-  const win = activeBookerWin();
-  if (!win) return { ok: false, error: "окно конторы не открыто" };
+async function captureBooker(id) {
+  let win = id && bookerWins.get(id);
+  if (!win || win.isDestroyed()) { win = activeBookerWin(); id = lastBookerId; }
+  if (!win) return { ok: false, error: "окно конторы не открыто (нажми «Войти»)" };
   try {
     const dir = logger.dir() || app.getPath("userData");
     const fs = require("node:fs");
     const summary = await win.webContents.executeJavaScript(BOOKER_SUMMARY_JS);
     const html = await win.webContents.executeJavaScript("document.documentElement.outerHTML");
-    const sumFile = join(dir, "booker-elements.txt");
+    const sumFile = join(dir, `booker-elements-${id || "x"}.txt`);
     fs.writeFileSync(sumFile, summary);
-    fs.writeFileSync(join(dir, `booker-dump-${Date.now()}.html`), html);
+    fs.writeFileSync(join(dir, `booker-dump-${id || "x"}-${Date.now()}.html`), html);
     logger.log("INFO", "снята разметка конторы:", win.webContents.getURL());
     await shell.openPath(sumFile); // откроем саму сводку — скопируешь и пришлёшь
     return { ok: true, summary, file: sumFile };
@@ -616,7 +617,7 @@ ipcMain.handle("randomize-fp", (_e, id) => {
   }
   return b ? b.fp : null;
 });
-ipcMain.handle("capture-booker", async () => await captureBooker());
+ipcMain.handle("capture-booker", async (_e, id) => await captureBooker(id));
 
 // ── запуск ────────────────────────────────────────────────────────────────────
 const gotLock = app.requestSingleInstanceLock();

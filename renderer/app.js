@@ -131,6 +131,10 @@ async function renderBookers() {
     det.append(el("button", { className: "ghost", textContent: "Рандом отпечатка", onclick: async () => { await window.api.randomizeFp(b.id); renderBookers(); } }));
 
     const actions = el("div", { className: "row" }, [
+      el("button", { className: "ghost", textContent: "Снять купон", onclick: async () => {
+        const r = await window.api.captureBooker(b.id);
+        $("saveHint").textContent = r.ok ? "🧾 купон «" + (b.name || b.id) + "» снят: " + r.file : "⚠️ " + r.error;
+      } }),
       el("button", { className: "ghost", textContent: "Сбросить данные браузера", onclick: async () => {
         if (!confirm("Сбросить cookies/сессию «" + (b.name || b.id) + "»? Логин слетит, надо будет войти заново.")) return;
         const r = await window.api.resetBookerData(b.id);
