@@ -153,10 +153,6 @@ async function openBookerProfile(profile, overrideUrl) {
 
   if (!ses.__hooked) {
     ses.__hooked = true;
-    ses.on("login", (event, _d, authInfo, cb) => {
-      if (authInfo.isProxy && ses.__creds) { event.preventDefault(); cb(ses.__creds.user, ses.__creds.pass); }
-      else cb();
-    });
     ses.setPermissionRequestHandler((_wc, perm, cb) => cb(true)); // гео (спуф) и пр. не блокируем
   }
 
@@ -175,6 +171,12 @@ async function openBookerProfile(profile, overrideUrl) {
     });
     win.on("closed", () => { bookerWins.delete(id); });
     try { win.webContents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp"); } catch { /* ignore */ }
+
+    // Авторизация прокси (HTTP/HTTPS) — событие приходит на ОКНО, не на сессию.
+    win.webContents.on("login", (event, _details, authInfo, cb) => {
+      if (authInfo.isProxy && ses.__creds) { event.preventDefault(); cb(ses.__creds.user, ses.__creds.pass); }
+      else cb();
+    });
 
     // Показ реальной причины «белого экрана» (ошибка прокси/сети) прямо в окне + в лог.
     win.webContents.on("did-fail-load", (_e, code, desc, failedUrl, isMainFrame) => {
