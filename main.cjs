@@ -287,15 +287,21 @@ async function dryRunPlace(id, stake) {
   if (!win || win.isDestroyed()) return { ok: false, error: "окно конторы не открыто (нажми «Войти»)" };
   const cfg = BETSLIP[id];
   if (!cfg) return { ok: false, error: "нет разметки купона для «" + id + "»" };
-  const js = `(() => {
+  const js = `(async () => {
     const inp = document.querySelector(${JSON.stringify(cfg.stake)});
     if (!inp) return { error: "поле суммы не найдено — сначала выбери исход (добавь в купон)" };
     try {
+      inp.focus();
+      const oldValue = inp.value;
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
       setter.call(inp, ${JSON.stringify(String(stake))});
+      // хак React: сбросить value-tracker на старое значение, чтобы onChange увидел изменение
+      if (inp._valueTracker) inp._valueTracker.setValue(oldValue);
       inp.dispatchEvent(new Event("input", { bubbles: true }));
       inp.dispatchEvent(new Event("change", { bubbles: true }));
+      inp.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
     } catch (e) { return { error: "не удалось вписать сумму: " + e.message }; }
+    await new Promise((r) => setTimeout(r, 800)); // дать сайту перерисоваться
     const words = ${JSON.stringify(cfg.placeWords)};
     const btn = [...document.querySelectorAll("button")].find((b) => {
       const t = (b.innerText || "").toUpperCase();
