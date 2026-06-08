@@ -116,19 +116,24 @@ async function openBookerProfile(profile) {
     });
     bookerWins.set(id, win);
     win.on("focus", () => { lastBookerId = id; });
+    // КРИТИЧНО: при закрытии окна отцепляем отладчик CDP, иначе падает весь процесс.
+    win.on("close", () => {
+      try { const d = win.webContents.debugger; if (d && d.isAttached && d.isAttached()) d.detach(); } catch { /* ignore */ }
+    });
     win.on("closed", () => { bookerWins.delete(id); });
     try { win.webContents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp"); } catch { /* ignore */ }
 
     // Показ реальной причины «белого экрана» (ошибка прокси/сети) прямо в окне + в лог.
     win.webContents.on("did-fail-load", (_e, code, desc, failedUrl, isMainFrame) => {
       if (code === -3 || !isMainFrame) return; // -3 = ABORTED (норма при редиректах)
+      if (win.isDestroyed() || win.webContents.isDestroyed()) return;
       logger.log("WARN", `контора ${id} не загрузилась: ${code} ${desc} ${failedUrl}`);
       const safe = (s) => String(s).replace(/[<>&]/g, "");
       const body = `<body style="font:14px monospace;padding:24px;color:#b00"><h3>Не удалось загрузить страницу</h3>` +
         `<p>Код: ${code} (${safe(desc)})</p><p>URL: ${safe(failedUrl)}</p>` +
         `<p>Частые причины: неверный прокси/тип (HTTP vs SOCKS5), нужна авторизация прокси, прокси недоступен.</p>` +
-        `<p>SOCKS5 указывай как <b>socks5://логин:пароль@host:port</b>.</p></body>`;
-      win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(body)).catch(() => {});
+        `<p>SOCKS5 указывай как <b>socks5://логин:пароль@host:port</b> или <b>socks5://host:port:логин:пароль</b>.</p></body>`;
+      try { win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(body)).catch(() => {}); } catch { /* окно закрылось */ }
     });
 
     const fp = profile.fp || {};
@@ -258,20 +263,33 @@ function setRunning(v) {
 // Прокси задаётся в настройках строкой: "host:port", "host:port:user:pass" или
 // "scheme://user:pass@host:port" (scheme: http/https/socks5). Так Telegram обходит
 // блокировку провайдера через твой прокси (те же, что для контор).
+// Поддерживаемые форматы:
+//   host:port | host:port:user:pass
+//   scheme://host:port | scheme://host:port:user:pass | scheme://user:pass@host:port
+// scheme: http/https/socks5/socks (по умолчанию http).
 function parseProxy(s) {
   s = String(s || "").trim();
   if (!s) return null;
-  try {
-    if (s.includes("://")) {
-      const u = new URL(s);
-      return { scheme: (u.protocol || "http:").replace(":", ""), host: u.hostname, port: u.port,
-        user: u.username ? decodeURIComponent(u.username) : "", pass: u.password ? decodeURIComponent(u.password) : "" };
-    }
-  } catch { return null; }
-  const p = s.split(":");
-  if (p.length === 2) return { scheme: "http", host: p[0], port: p[1], user: "", pass: "" };
-  if (p.length === 4) return { scheme: "http", host: p[0], port: p[1], user: p[2], pass: p[3] };
-  return null;
+  let scheme = "http";
+  const m = s.match(/^([a-z][a-z0-9]*):\/\//i);
+  if (m) { scheme = m[1].toLowerCase(); s = s.slice(m[0].length); }
+  if (scheme === "socks") scheme = "socks5";
+  let user = "", pass = "", host = "", port = "";
+  if (s.includes("@")) {
+    const at = s.lastIndexOf("@");
+    const cred = s.slice(0, at), hp = s.slice(at + 1);
+    const ci = cred.indexOf(":");
+    user = ci >= 0 ? cred.slice(0, ci) : cred;
+    pass = ci >= 0 ? cred.slice(ci + 1) : "";
+    const parts = hp.split(":");
+    host = parts[0]; port = parts[1] || "";
+  } else {
+    const parts = s.split(":");
+    host = parts[0]; port = parts[1] || "";
+    if (parts.length >= 4) { user = parts[2]; pass = parts.slice(3).join(":"); }
+  }
+  if (!host || !port) return null;
+  return { scheme, host, port, user, pass };
 }
 
 let tgSes = null;
