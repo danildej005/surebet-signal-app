@@ -144,12 +144,19 @@ async function renderBookers() {
 
     const stakeBox = el("input", { type: "text", placeholder: "сумма" });
     stakeBox.style.maxWidth = "120px";
-    const dryRow = el("div", { className: "row" }, [
-      stakeBox,
-      el("button", { className: "ghost", textContent: "Тест ставки (dry-run)", onclick: async () => {
-        const r = await window.api.dryRunPlace(b.id, stakeBox.value.trim() || "10");
-        $("saveHint").textContent = r.ok ? "🧪 вписал сумму: " + r.stakeValue + " · кнопка ставки: " + (r.placeBtn || "НЕ найдена") : "⚠️ " + r.error;
-      } }),
+    const dryResult = el("div", { className: "muted", textContent: "сначала выбери исход в купоне, потом жми тест" });
+    const dryRow = el("div", {}, [
+      el("div", { className: "row" }, [
+        stakeBox,
+        el("button", { className: "ghost", textContent: "Тест ставки (dry-run)", onclick: async () => {
+          dryResult.textContent = "проверяю…";
+          try {
+            const r = await window.api.dryRunPlace(b.id, stakeBox.value.trim() || "10");
+            dryResult.textContent = r.ok ? "🧪 вписал сумму: " + r.stakeValue + " · кнопка ставки: " + (r.placeBtn || "НЕ найдена") : "⚠️ " + r.error;
+          } catch (e) { dryResult.textContent = "⚠️ " + e.message; }
+        } }),
+      ]),
+      dryResult,
     ]);
 
     const card = el("div", { className: "booker" }, [
