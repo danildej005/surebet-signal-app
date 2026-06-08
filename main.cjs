@@ -77,8 +77,17 @@ function createSurebetWindow() {
       // 1) surebet-редирект /nav/.../prong/N/ → контора и событие по индексу плеча
       const nav = resolveSurebetNav(url, settings.bookers || []);
       if (nav && nav.booker) {
-        logger.log("INFO", "  → контора:", nav.booker.id, "| событие:", nav.targetUrl);
-        openBookerProfile(nav.booker, nav.targetUrl).catch((e) => logger.log("WARN", "route booker:", e));
+        const initial = nav.targetUrl || nav.booker.url;
+        logger.log("INFO", "  → контора:", nav.booker.id, "| открываю:", initial);
+        openBookerProfile(nav.booker, initial).catch((e) => logger.log("WARN", "route booker:", e));
+        // параллельно проходим surebet-редирект → глубокая ссылка события (важно для Betano)
+        resolveEventViaNav(url, nav.booker).then((eventUrl) => {
+          if (eventUrl && eventUrl !== initial) {
+            logger.log("INFO", "  глубокая ссылка события:", eventUrl);
+            const w = bookerWins.get(nav.booker.id);
+            if (w && !w.isDestroyed()) w.loadURL(eventUrl);
+          }
+        }).catch((e) => logger.log("WARN", "resolveEventViaNav:", e));
         return { action: "deny" };
       }
       if (nav) logger.log("WARN", "  bk не сопоставлен с профилем:", nav.bk);
@@ -210,6 +219,44 @@ async function openBookerProfile(profile, overrideUrl) {
   const target = overrideUrl || profile.url;
   if (target) win.loadURL(target);
   return win;
+}
+
+// Регэксп домена конторы (для определения, что редирект дошёл до неё).
+function bookerDomainRe(booker) {
+  const kws = ({ betano: ["betano"], pinnacle: ["pinnacle888", "ps3838", "pinnacle"] }[booker.id]) || [booker.id];
+  return new RegExp("(" + kws.join("|") + ")", "i");
+}
+
+// Пройти surebet-редирект (с surebet-сессией) и вернуть финальный URL события на конторе.
+// Surebet строит глубокую ссылку (особенно для Betano) на сервере — ловим её из навигаций.
+function resolveEventViaNav(navUrl, booker, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    let navWin;
+    try {
+      navWin = new BrowserWindow({ show: false, webPreferences: { partition: "persist:surebet", backgroundThrottling: false } });
+    } catch (e) { logger.log("WARN", "navWin:", e); return resolve(null); }
+    const wc = navWin.webContents;
+    const re = bookerDomainRe(booker);
+    let best = null, done = false, settle = null;
+    const finish = () => {
+      if (done) return; done = true;
+      clearTimeout(settle);
+      try { if (!navWin.isDestroyed()) navWin.destroy(); } catch { /* ignore */ }
+      resolve(best);
+    };
+    const onNav = (url) => {
+      if (url && re.test(url) && !/surebet\.com/i.test(url)) {
+        best = url;                          // дошли до конторы
+        clearTimeout(settle);
+        settle = setTimeout(finish, 3000);   // подождать JS-редирект к самому событию
+      }
+    };
+    wc.on("did-redirect-navigation", (_e, url) => onNav(url));
+    wc.on("did-navigate", (_e, url) => onNav(url));
+    wc.on("did-navigate-in-page", (_e, url) => onNav(url));
+    wc.loadURL(navUrl).catch(() => {});
+    setTimeout(finish, timeoutMs);           // жёсткий таймаут
+  });
 }
 
 function findBooker(id) { return (settings.bookers || []).find((b) => b.id === id); }
