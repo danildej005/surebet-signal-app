@@ -13,6 +13,7 @@ const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
 const { defaultBookers, randomFingerprint, buildFingerprintScript } = require("./lib/bookers.cjs");
+const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 
 const SUREBET_URL = "https://su.surebet.com/surebets";
 const PARTITION = "persist:surebet"; // постоянная сессия → логин сохраняется
@@ -83,9 +84,28 @@ function createPanelWindow() {
 }
 
 // ── антидетект-окно конторы (профиль: сессия + прокси + отпечаток + гео) ───────
+const proxyBridges = new Map(); // строка прокси → { url, close } (мост для авторизованного SOCKS5)
+
 async function applySessionProxy(ses, proxyStr) {
   const p = parseProxy(proxyStr);
   if (!p || !p.host || !p.port) { ses.__creds = null; try { await ses.setProxy({ mode: "direct" }); } catch { /* ignore */ } return; }
+
+  const isSocks = p.scheme === "socks5" || p.scheme === "socks";
+  // Авторизованный SOCKS5 → поднимаем локальный мост (Chromium сам авторизацию SOCKS5 не умеет).
+  if (isSocks && (p.user || p.pass)) {
+    let bridge = proxyBridges.get(proxyStr);
+    if (!bridge) {
+      try { bridge = await startSocksBridge(p); proxyBridges.set(proxyStr, bridge); logger.log("INFO", "SOCKS5-мост поднят:", bridge.url, "→", p.host + ":" + p.port); }
+      catch (e) { logger.log("WARN", "SOCKS5-мост не поднялся:", e); }
+    }
+    if (bridge) {
+      ses.__creds = null;
+      try { await ses.setProxy({ proxyRules: bridge.url }); } catch (e) { logger.log("WARN", "setProxy(bridge):", e); }
+      return;
+    }
+  }
+
+  // Обычный путь: SOCKS5 без авторизации, либо HTTP(S) (авторизация — через событие login).
   ses.__creds = (p.user || p.pass) ? { user: p.user, pass: p.pass } : null;
   try { await ses.setProxy({ proxyRules: `${p.scheme}://${p.host}:${p.port}` }); }
   catch (e) { logger.log("WARN", "booker setProxy:", e); }

@@ -1,6 +1,6 @@
 {
   "name": "surebet-signal-app",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Surebet Signal — следит за вилками surebet.com (Pinnacle) и шлёт сигналы в Telegram.",
   "main": "main.cjs",
   "author": "",
@@ -13,7 +13,8 @@
     "release": "electron-builder --win --x64 --publish always"
   },
   "dependencies": {
-    "electron-updater": "^6.3.9"
+    "electron-updater": "^6.3.9",
+    "socks": "^2.8.9"
   },
   "devDependencies": {
     "electron": "^33.4.11",
@@ -22,10 +23,27 @@
   "build": {
     "appId": "com.surebet.signal",
     "productName": "Surebet Signal",
-    "directories": { "output": "release", "buildResources": "build" },
-    "files": ["main.cjs", "preload-control.cjs", "preload-surebet.cjs", "lib/**/*", "renderer/**/*", "build/icon.*"],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "preload-control.cjs",
+      "preload-surebet.cjs",
+      "lib/**/*",
+      "renderer/**/*",
+      "build/icon.*"
+    ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "build/icon.ico"
     },
     "nsis": {
@@ -36,10 +54,12 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Surebet Signal"
     },
-    "publish": [{
-      "provider": "github",
-      "owner": "danildej005",
-      "repo": "surebet-signal-app"
-    }]
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "danildej005",
+        "repo": "surebet-signal-app"
+      }
+    ]
   }
 }
