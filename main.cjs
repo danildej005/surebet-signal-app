@@ -158,6 +158,16 @@ async function openBookerProfile(profile) {
 
     const fp = profile.fp || {};
     if (fp.ua) { try { win.webContents.setUserAgent(fp.ua); } catch { /* ignore */ } }
+
+    // КРИТИЧНО: сначала поднимаем рендерер пустой страницей, иначе CDP-команды зависают
+    // (и loadURL ниже никогда не вызывается → белый экран). Ждём готовности или 3с.
+    try {
+      await Promise.race([
+        new Promise((res) => { win.webContents.once("did-finish-load", res); win.loadURL("about:blank"); }),
+        new Promise((res) => setTimeout(res, 3000)),
+      ]);
+    } catch { /* ignore */ }
+
     try {
       const dbg = win.webContents.debugger;
       dbg.attach("1.3");
