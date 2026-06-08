@@ -15,5 +15,6 @@ contextBridge.exposeInMainWorld("api", {
   randomizeFp: (id) => ipcRenderer.invoke("randomize-fp", id),
   resetBookerData: (id) => ipcRenderer.invoke("reset-booker-data", id),
   captureBooker: (id) => ipcRenderer.invoke("capture-booker", id),
+  dryRunPlace: (id, stake) => ipcRenderer.invoke("dry-run-place", id, stake),
   onStatus: (cb) => ipcRenderer.on("status", (_e, s) => cb(s)),
 });

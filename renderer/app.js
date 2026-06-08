@@ -142,6 +142,16 @@ async function renderBookers() {
       } }),
     ]);
 
+    const stakeBox = el("input", { type: "text", placeholder: "сумма" });
+    stakeBox.style.maxWidth = "120px";
+    const dryRow = el("div", { className: "row" }, [
+      stakeBox,
+      el("button", { className: "ghost", textContent: "Тест ставки (dry-run)", onclick: async () => {
+        const r = await window.api.dryRunPlace(b.id, stakeBox.value.trim() || "10");
+        $("saveHint").textContent = r.ok ? "🧪 вписал сумму: " + r.stakeValue + " · кнопка ставки: " + (r.placeBtn || "НЕ найдена") : "⚠️ " + r.error;
+      } }),
+    ]);
+
     const card = el("div", { className: "booker" }, [
       head,
       field("Адрес для входа (главная конторы)", b.url || "", (v) => (b.url = v)),
@@ -149,6 +159,7 @@ async function renderBookers() {
       loginBox,
       checkRow("Открывать при старте (войти заранее)", b.autoOpen, (v) => (b.autoOpen = v)),
       det,
+      dryRow,
       actions,
     ]);
     root.append(card);

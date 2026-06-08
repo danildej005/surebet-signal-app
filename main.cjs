@@ -275,6 +275,41 @@ function normalizeBooker(b) {
   return b;
 }
 
+// Разметка купона по конторе (поле суммы + слова на кнопке постановки).
+const BETSLIP = {
+  betano: { stake: 'input[id^="stakeInput"]', placeWords: ["BET NOW"] },
+  pinnacle: { stake: 'input[name="stake"]', placeWords: ["CONFIRM", "SINGLE BET"] },
+};
+
+// Безопасный dry-run: вписать сумму в купон + найти кнопку постановки. НЕ нажимает.
+async function dryRunPlace(id, stake) {
+  const win = bookerWins.get(id);
+  if (!win || win.isDestroyed()) return { ok: false, error: "окно конторы не открыто (нажми «Войти»)" };
+  const cfg = BETSLIP[id];
+  if (!cfg) return { ok: false, error: "нет разметки купона для «" + id + "»" };
+  const js = `(() => {
+    const inp = document.querySelector(${JSON.stringify(cfg.stake)});
+    if (!inp) return { error: "поле суммы не найдено — сначала выбери исход (добавь в купон)" };
+    try {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+      setter.call(inp, ${JSON.stringify(String(stake))});
+      inp.dispatchEvent(new Event("input", { bubbles: true }));
+      inp.dispatchEvent(new Event("change", { bubbles: true }));
+    } catch (e) { return { error: "не удалось вписать сумму: " + e.message }; }
+    const words = ${JSON.stringify(cfg.placeWords)};
+    const btn = [...document.querySelectorAll("button")].find((b) => {
+      const t = (b.innerText || "").toUpperCase();
+      return words.every((w) => t.includes(w.toUpperCase()));
+    });
+    return { ok: true, stakeValue: inp.value, placeBtn: btn ? (btn.innerText || "").replace(/\\s+/g, " ").trim() : null };
+  })()`;
+  try {
+    const r = await win.webContents.executeJavaScript(js);
+    logger.log("INFO", "dry-run", id, JSON.stringify(r));
+    return r;
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
 function findBooker(id) { return (settings.bookers || []).find((b) => b.id === id); }
 function activeBookerWin() {
   let w = lastBookerId && bookerWins.get(lastBookerId);
@@ -618,6 +653,7 @@ ipcMain.handle("randomize-fp", (_e, id) => {
   return b ? b.fp : null;
 });
 ipcMain.handle("capture-booker", async (_e, id) => await captureBooker(id));
+ipcMain.handle("dry-run-place", async (_e, id, stake) => await dryRunPlace(id, stake));
 
 // ── запуск ────────────────────────────────────────────────────────────────────
 const gotLock = app.requestSingleInstanceLock();
