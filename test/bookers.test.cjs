@@ -1,7 +1,7 @@
 "use strict";
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { bookerForUrl, resolveSurebetNav, defaultBookers, buildFingerprintScript, randomFingerprint } = require("../lib/bookers.cjs");
+const { bookerForUrl, resolveSurebetNav, buildProxyString, defaultBookers, buildFingerprintScript, randomFingerprint } = require("../lib/bookers.cjs");
 
 const bookers = [
   { id: "betano", name: "Betano", url: "https://www.betano.pt/" },
@@ -34,6 +34,14 @@ test("surebet-nav prong/1 → betano + главная (глубокой нет)"
 
 test("не surebet-nav ссылка → null", () => {
   assert.equal(resolveSurebetNav("https://www.betano.pt/event/1", bookers), null);
+});
+
+test("buildProxyString: структурный прокси → строка для parseProxy", () => {
+  assert.equal(buildProxyString({ protocol: "socks5", host: "1.2.3.4", port: "1080", user: "u", pass: "p" }), "socks5://1.2.3.4:1080:u:p");
+  assert.equal(buildProxyString({ protocol: "http", host: "1.2.3.4", port: "8080", user: "", pass: "" }), "http://1.2.3.4:8080");
+  assert.equal(buildProxyString({ protocol: "", host: "1.2.3.4", port: "8080" }), ""); // нет протокола → без прокси
+  assert.equal(buildProxyString("socks5://x:1:u:p"), "socks5://x:1:u:p"); // старый строковый формат
+  assert.equal(buildProxyString(null), "");
 });
 
 test("распознаёт betano по ссылке", () => {

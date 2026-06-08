@@ -12,7 +12,7 @@ const { formatSignal } = require("./lib/format.cjs");
 const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
-const { defaultBookers, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav } = require("./lib/bookers.cjs");
+const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 
 const SUREBET_URL = "https://su.surebet.com/surebets";
@@ -145,10 +145,11 @@ async function applySessionProxy(ses, proxyStr) {
 
 async function openBookerProfile(profile, overrideUrl) {
   if (!profile || !profile.id) return null;
+  normalizeBooker(profile);
   const id = profile.id;
   const partition = "persist:booker-" + id;
   const ses = session.fromPartition(partition);
-  await applySessionProxy(ses, profile.proxy);
+  await applySessionProxy(ses, buildProxyString(profile.proxy));
 
   if (!ses.__hooked) {
     ses.__hooked = true;
@@ -257,6 +258,19 @@ function resolveEventViaNav(navUrl, booker, timeoutMs = 15000) {
     wc.loadURL(navUrl).catch(() => {});
     setTimeout(finish, timeoutMs);           // жёсткий таймаут
   });
+}
+
+// Привести профиль к новому виду: прокси-объект {protocol,host,port,user,pass} + login.
+function normalizeBooker(b) {
+  if (!b) return b;
+  if (typeof b.proxy === "string") {
+    const p = parseProxy(b.proxy);
+    b.proxy = p ? { protocol: p.scheme, host: p.host, port: p.port, user: p.user, pass: p.pass } : emptyProxy();
+  } else if (!b.proxy || typeof b.proxy !== "object") {
+    b.proxy = emptyProxy();
+  }
+  if (!b.login || typeof b.login !== "object") b.login = { user: "", pass: "" };
+  return b;
 }
 
 function findBooker(id) { return (settings.bookers || []).find((b) => b.id === id); }
@@ -564,10 +578,25 @@ ipcMain.handle("open-logs", async () => {
   if (d) await shell.openPath(d);
   return { ok: !!d, dir: d };
 });
-ipcMain.handle("get-bookers", () => settings.bookers || []);
-ipcMain.handle("save-bookers", (_e, list) => {
-  if (Array.isArray(list)) settings = settingsStore.save({ bookers: list });
+ipcMain.handle("get-bookers", () => {
+  const list = (settings.bookers || []).map(normalizeBooker); // миграция старого формата
+  settings = settingsStore.save({ bookers: list });
   return settings.bookers || [];
+});
+ipcMain.handle("save-bookers", (_e, list) => {
+  if (Array.isArray(list)) settings = settingsStore.save({ bookers: list.map(normalizeBooker) });
+  return settings.bookers || [];
+});
+ipcMain.handle("reset-booker-data", async (_e, id) => {
+  try {
+    const ses = session.fromPartition("persist:booker-" + id);
+    await ses.clearStorageData();
+    try { await ses.clearCache(); } catch { /* ignore */ }
+    const w = bookerWins.get(id);
+    if (w && !w.isDestroyed()) w.close(); // закроем — откроется чисто при следующем «Войти»
+    logger.log("INFO", "сброс данных браузера конторы:", id);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle("open-booker", async (_e, id) => {
   const b = findBooker(id);

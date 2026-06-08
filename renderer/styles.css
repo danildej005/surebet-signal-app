@@ -17,9 +17,15 @@ button { padding: 8px 14px; border: 0; border-radius: 8px; background: #2563eb; 
 button.ghost { background: #e5e7eb; color: #111; }
 button:hover { filter: brightness(0.96); }
 .booker { border: 1px solid #e3e5e8; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+.subbox { border: 1px dashed #d4d7db; border-radius: 8px; padding: 8px; margin-top: 8px; }
+select { width: 100%; padding: 8px; border: 1px solid #cfd2d6; border-radius: 8px; font-size: 13px; margin-top: 4px; background: #fff; color: #111; }
+@media (prefers-color-scheme: dark) { .subbox { border-color: #3a3d42; } select { background: #1f2125; color: #e5e7eb; border-color: #3a3d42; } }
 .booker .row { justify-content: space-between; }
 details { margin-top: 6px; }
 summary { cursor: pointer; }
+.card-toggle { font-size: 14px; font-weight: 600; padding: 2px 0; }
+.card-body { margin-top: 8px; }
+.hint { padding: 0 4px 8px; min-height: 14px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: #9ca3af; display: inline-block; }
 .dot.on { background: #16a34a; }
 .dot.warn { background: #f59e0b; }

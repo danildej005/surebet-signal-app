@@ -69,16 +69,55 @@ function checkRow(label, checked, onchange) {
   return wrap;
 }
 
+function selectField(label, value, options, onchange) {
+  const s = el("select");
+  options.forEach(([val, txt]) => {
+    const o = el("option", { value: val, textContent: txt });
+    if (val === value) o.selected = true;
+    s.append(o);
+  });
+  s.onchange = () => onchange(s.value);
+  return el("label", { textContent: label }, [s]);
+}
+
 async function renderBookers() {
   bookersCache = await window.api.getBookers();
   const root = $("bookers");
   root.innerHTML = "";
   bookersCache.forEach((b) => {
     b.fp = b.fp || {};
+    b.proxy = b.proxy || { protocol: "", host: "", port: "", user: "", pass: "" };
+    b.login = b.login || { user: "", pass: "" };
+
     const head = el("div", { className: "row" }, [
       el("b", { textContent: b.name || b.id }),
       el("button", { textContent: "Войти", onclick: async () => { await window.api.saveBookers(bookersCache); await window.api.openBooker(b.id); } }),
     ]);
+
+    // Прокси (структурно)
+    const proxyBox = el("div", { className: "subbox" }, [
+      el("div", { className: "muted", textContent: "Прокси конторы" }),
+      selectField("Протокол", b.proxy.protocol || "", [["", "нет прокси"], ["http", "HTTP"], ["https", "HTTPS"], ["socks5", "SOCKS5"]], (v) => (b.proxy.protocol = v)),
+      el("div", { className: "grid2" }, [
+        field("Хост", b.proxy.host || "", (v) => (b.proxy.host = v)),
+        field("Порт", b.proxy.port || "", (v) => (b.proxy.port = v)),
+      ]),
+      el("div", { className: "grid2" }, [
+        field("Логин прокси", b.proxy.user || "", (v) => (b.proxy.user = v)),
+        field("Пароль прокси", b.proxy.pass || "", (v) => (b.proxy.pass = v)),
+      ]),
+    ]);
+
+    // Аккаунт конторы (для будущего автологина)
+    const loginBox = el("div", { className: "subbox" }, [
+      el("div", { className: "muted", textContent: "Аккаунт конторы (для будущего автологина)" }),
+      el("div", { className: "grid2" }, [
+        field("Логин", b.login.user || "", (v) => (b.login.user = v)),
+        field("Пароль", b.login.pass || "", (v) => (b.login.pass = v)),
+      ]),
+    ]);
+
+    // Отпечаток
     const det = el("details");
     det.append(el("summary", { className: "muted", textContent: "Отпечаток (изменить вручную)" }));
     FP_FIELDS.forEach(([key, lbl]) => {
@@ -91,12 +130,22 @@ async function renderBookers() {
     });
     det.append(el("button", { className: "ghost", textContent: "Рандом отпечатка", onclick: async () => { await window.api.randomizeFp(b.id); renderBookers(); } }));
 
+    const actions = el("div", { className: "row" }, [
+      el("button", { className: "ghost", textContent: "Сбросить данные браузера", onclick: async () => {
+        if (!confirm("Сбросить cookies/сессию «" + (b.name || b.id) + "»? Логин слетит, надо будет войти заново.")) return;
+        const r = await window.api.resetBookerData(b.id);
+        $("saveHint").textContent = r.ok ? "🧹 данные «" + (b.name || b.id) + "» сброшены" : "⚠️ " + r.error;
+      } }),
+    ]);
+
     const card = el("div", { className: "booker" }, [
       head,
       field("Адрес для входа (главная конторы)", b.url || "", (v) => (b.url = v)),
-      field("Прокси (host:port[:user:pass])", b.proxy || "", (v) => (b.proxy = v)),
+      proxyBox,
+      loginBox,
       checkRow("Открывать при старте (войти заранее)", b.autoOpen, (v) => (b.autoOpen = v)),
       det,
+      actions,
     ]);
     root.append(card);
   });
