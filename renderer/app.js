@@ -30,6 +30,14 @@ window.api.onStatus(renderStatus);
 
 $("openSurebet").onclick = () => window.api.openSurebet();
 $("openLogs").onclick = () => window.api.openLogs();
+$("openBetano").onclick = () => window.api.openBooker("https://www.betano.pt/");
+$("openPinnacle").onclick = () => window.api.openBooker("https://www.pinnacle.com/");
+$("openBooker").onclick = () => { const u = $("bookerUrl").value.trim(); if (u) window.api.openBooker(u.includes("://") ? u : "https://" + u); };
+$("captureBooker").onclick = async () => {
+  $("saveHint").textContent = "снимаю разметку купона…";
+  const r = await window.api.captureBooker();
+  $("saveHint").textContent = r.ok ? "✅ снято: " + r.file : "⚠️ " + r.error;
+};
 $("logout").onclick = async () => { await window.api.logoutSurebet(); };
 $("toggleRun").onclick = async () => {
   const s = await window.api.getStatus();

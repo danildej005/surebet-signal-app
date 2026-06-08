@@ -52,6 +52,22 @@
   </section>
 
   <section class="card">
+    <h2>Конторы (открытие / отладка купона)</h2>
+    <div class="row">
+      <button id="openBetano" class="ghost">Открыть Betano</button>
+      <button id="openPinnacle" class="ghost">Открыть Pinnacle</button>
+    </div>
+    <label>Или адрес события
+      <input id="bookerUrl" type="text" placeholder="https://..." />
+    </label>
+    <div class="row">
+      <button id="openBooker">Открыть адрес</button>
+      <button id="captureBooker" class="ghost">Снять разметку купона</button>
+    </div>
+    <div class="muted">Открой контору, залогинься, добавь исход в купон → «Снять разметку купона» → пришли мне файл booker-dump-*.html.</div>
+  </section>
+
+  <section class="card">
     <div class="row">
       <button id="toggleRun" class="ghost">Пауза / Возобновить</button>
       <button id="openLogs" class="ghost">Показать логи</button>
