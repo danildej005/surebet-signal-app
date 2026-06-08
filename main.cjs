@@ -119,6 +119,18 @@ async function openBookerProfile(profile) {
     win.on("closed", () => { bookerWins.delete(id); });
     try { win.webContents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp"); } catch { /* ignore */ }
 
+    // Показ реальной причины «белого экрана» (ошибка прокси/сети) прямо в окне + в лог.
+    win.webContents.on("did-fail-load", (_e, code, desc, failedUrl, isMainFrame) => {
+      if (code === -3 || !isMainFrame) return; // -3 = ABORTED (норма при редиректах)
+      logger.log("WARN", `контора ${id} не загрузилась: ${code} ${desc} ${failedUrl}`);
+      const safe = (s) => String(s).replace(/[<>&]/g, "");
+      const body = `<body style="font:14px monospace;padding:24px;color:#b00"><h3>Не удалось загрузить страницу</h3>` +
+        `<p>Код: ${code} (${safe(desc)})</p><p>URL: ${safe(failedUrl)}</p>` +
+        `<p>Частые причины: неверный прокси/тип (HTTP vs SOCKS5), нужна авторизация прокси, прокси недоступен.</p>` +
+        `<p>SOCKS5 указывай как <b>socks5://логин:пароль@host:port</b>.</p></body>`;
+      win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(body)).catch(() => {});
+    });
+
     const fp = profile.fp || {};
     if (fp.ua) { try { win.webContents.setUserAgent(fp.ua); } catch { /* ignore */ } }
     try {
