@@ -12,7 +12,7 @@ const { formatSignal } = require("./lib/format.cjs");
 const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
-const { defaultBookers, randomFingerprint, buildFingerprintScript } = require("./lib/bookers.cjs");
+const { defaultBookers, randomFingerprint, buildFingerprintScript, bookerForUrl } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 
 const SUREBET_URL = "https://su.surebet.com/surebets";
@@ -68,6 +68,22 @@ function createSurebetWindow() {
   surebetWin.webContents.on("did-fail-load", (_e, code, desc, url) => {
     if (code !== -3) logger.log("WARN", `surebet did-fail-load ${code} ${desc} ${url}`);
   });
+
+  // ФАЗА 4: клик по плечу вилки → перехватываем ссылку и открываем нужную контору
+  // в её антидетект-окне (залогинено, через прокси), сразу на событии.
+  surebetWin.webContents.setWindowOpenHandler(({ url }) => {
+    logger.log("INFO", "клик по плечу surebet → ссылка:", url);
+    try {
+      const b = bookerForUrl(url, settings.bookers || []);
+      if (b) {
+        logger.log("INFO", "  → открываю контору:", b.id);
+        openBookerProfile(b, url).catch((e) => logger.log("WARN", "route booker:", e));
+        return { action: "deny" }; // не открываем дефолтное окно
+      }
+      logger.log("WARN", "  контора по ссылке не распознана — открываю обычным окном");
+    } catch (e) { logger.log("WARN", "windowOpen route:", e); }
+    return { action: "allow" }; // не распознали — пусть откроется как есть (ссылка не потеряется)
+  });
 }
 
 function createPanelWindow() {
@@ -111,7 +127,7 @@ async function applySessionProxy(ses, proxyStr) {
   catch (e) { logger.log("WARN", "booker setProxy:", e); }
 }
 
-async function openBookerProfile(profile) {
+async function openBookerProfile(profile, overrideUrl) {
   if (!profile || !profile.id) return null;
   const id = profile.id;
   const partition = "persist:booker-" + id;
@@ -184,7 +200,8 @@ async function openBookerProfile(profile) {
 
   lastBookerId = id;
   win.show(); win.focus();
-  if (profile.url) win.loadURL(profile.url);
+  const target = overrideUrl || profile.url;
+  if (target) win.loadURL(target);
   return win;
 }
 
