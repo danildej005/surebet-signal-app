@@ -52,19 +52,12 @@
   </section>
 
   <section class="card">
-    <h2>Конторы (открытие / отладка купона)</h2>
+    <h2>Конторы (антидетект)</h2>
+    <div id="bookers"></div>
     <div class="row">
-      <button id="openBetano" class="ghost">Открыть Betano</button>
-      <button id="openPinnacle" class="ghost">Открыть Pinnacle</button>
+      <button id="captureBooker" class="ghost">Снять разметку купона (активной)</button>
     </div>
-    <label>Или адрес события
-      <input id="bookerUrl" type="text" placeholder="https://..." />
-    </label>
-    <div class="row">
-      <button id="openBooker">Открыть адрес</button>
-      <button id="captureBooker" class="ghost">Снять разметку купона</button>
-    </div>
-    <div class="muted">Открой контору, залогинься, добавь исход в купон → «Снять разметку купона» → пришли мне файл booker-dump-*.html.</div>
+    <div class="muted">У каждой конторы — своя сессия, прокси и отпечаток. «Войти» открывает её окно; логин сохраняется. После входа добавь исход в купон → «Снять разметку купона» → пришли мне сводку.</div>
   </section>
 
   <section class="card">

@@ -16,6 +16,10 @@ input { width: 100%; padding: 8px; border: 1px solid #cfd2d6; border-radius: 8px
 button { padding: 8px 14px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font-size: 13px; cursor: pointer; }
 button.ghost { background: #e5e7eb; color: #111; }
 button:hover { filter: brightness(0.96); }
+.booker { border: 1px solid #e3e5e8; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+.booker .row { justify-content: space-between; }
+details { margin-top: 6px; }
+summary { cursor: pointer; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: #9ca3af; display: inline-block; }
 .dot.on { background: #16a34a; }
 .dot.warn { background: #f59e0b; }

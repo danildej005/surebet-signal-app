@@ -30,14 +30,68 @@ window.api.onStatus(renderStatus);
 
 $("openSurebet").onclick = () => window.api.openSurebet();
 $("openLogs").onclick = () => window.api.openLogs();
-$("openBetano").onclick = () => window.api.openBooker("https://www.betano.pt/");
-$("openPinnacle").onclick = () => window.api.openBooker("https://www.pinnacle.com/");
-$("openBooker").onclick = () => { const u = $("bookerUrl").value.trim(); if (u) window.api.openBooker(u.includes("://") ? u : "https://" + u); };
 $("captureBooker").onclick = async () => {
   $("saveHint").textContent = "снимаю разметку купона…";
   const r = await window.api.captureBooker();
   $("saveHint").textContent = r.ok ? "✅ снято: " + r.file : "⚠️ " + r.error;
 };
+
+// ── конторы (антидетект-профили) ──────────────────────────────────────────────
+let bookersCache = [];
+const FP_FIELDS = [
+  ["ua", "User-Agent"], ["cores", "Ядра CPU"], ["memory", "Память, ГБ"],
+  ["screenW", "Экран, ширина"], ["screenH", "Экран, высота"],
+  ["webglVendor", "WebGL vendor"], ["webglRenderer", "WebGL renderer"],
+  ["languages", "Языки (через запятую)"], ["timezone", "Таймзона"], ["locale", "Локаль"],
+  ["lat", "Гео широта"], ["lon", "Гео долгота"],
+];
+const NUM_FP = ["cores", "memory", "screenW", "screenH", "lat", "lon"];
+
+function el(tag, props = {}, kids = []) {
+  const e = document.createElement(tag);
+  Object.assign(e, props);
+  kids.forEach((k) => e.append(k));
+  return e;
+}
+function field(label, value, onchange) {
+  const i = el("input", { type: "text", value: value == null ? "" : String(value) });
+  i.oninput = () => onchange(i.value);
+  return el("label", { textContent: label }, [i]);
+}
+
+async function renderBookers() {
+  bookersCache = await window.api.getBookers();
+  const root = $("bookers");
+  root.innerHTML = "";
+  bookersCache.forEach((b) => {
+    b.fp = b.fp || {};
+    const head = el("div", { className: "row" }, [
+      el("b", { textContent: b.name || b.id }),
+      el("button", { textContent: "Войти", onclick: async () => { await window.api.saveBookers(bookersCache); await window.api.openBooker(b.id); } }),
+    ]);
+    const det = el("details");
+    det.append(el("summary", { className: "muted", textContent: "Отпечаток (изменить вручную)" }));
+    FP_FIELDS.forEach(([key, lbl]) => {
+      const val = Array.isArray(b.fp[key]) ? b.fp[key].join(",") : b.fp[key];
+      det.append(field(lbl, val, (v) => {
+        if (key === "languages") b.fp[key] = v.split(",").map((s) => s.trim()).filter(Boolean);
+        else if (NUM_FP.includes(key)) b.fp[key] = v === "" ? null : Number(v);
+        else b.fp[key] = v;
+      }));
+    });
+    det.append(el("button", { className: "ghost", textContent: "Рандом отпечатка", onclick: async () => { await window.api.randomizeFp(b.id); renderBookers(); } }));
+
+    const card = el("div", { className: "booker" }, [
+      head,
+      field("URL события/сайта", b.url || "", (v) => (b.url = v)),
+      field("Прокси (host:port[:user:pass])", b.proxy || "", (v) => (b.proxy = v)),
+      det,
+    ]);
+    root.append(card);
+  });
+  root.append(el("button", { textContent: "Сохранить конторы", onclick: async () => { await window.api.saveBookers(bookersCache); $("saveHint").textContent = "✅ конторы сохранены"; } }));
+}
+renderBookers();
 $("logout").onclick = async () => { await window.api.logoutSurebet(); };
 $("toggleRun").onclick = async () => {
   const s = await window.api.getStatus();

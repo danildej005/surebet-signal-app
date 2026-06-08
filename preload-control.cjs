@@ -9,7 +9,10 @@ contextBridge.exposeInMainWorld("api", {
   testTelegram: () => ipcRenderer.invoke("test-telegram"),
   logoutSurebet: () => ipcRenderer.invoke("logout-surebet"),
   openLogs: () => ipcRenderer.invoke("open-logs"),
-  openBooker: (url) => ipcRenderer.invoke("open-booker", url),
+  getBookers: () => ipcRenderer.invoke("get-bookers"),
+  saveBookers: (list) => ipcRenderer.invoke("save-bookers", list),
+  openBooker: (id) => ipcRenderer.invoke("open-booker", id),
+  randomizeFp: (id) => ipcRenderer.invoke("randomize-fp", id),
   captureBooker: () => ipcRenderer.invoke("capture-booker"),
   onStatus: (cb) => ipcRenderer.on("status", (_e, s) => cb(s)),
 });

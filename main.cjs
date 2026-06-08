@@ -12,6 +12,7 @@ const { formatSignal } = require("./lib/format.cjs");
 const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
+const { defaultBookers, randomFingerprint, buildFingerprintScript } = require("./lib/bookers.cjs");
 
 const SUREBET_URL = "https://su.surebet.com/surebets";
 const PARTITION = "persist:surebet"; // постоянная сессия → логин сохраняется
@@ -20,7 +21,8 @@ let settings = null;
 let dedupe = null;
 let surebetWin = null;
 let panelWin = null;
-let bookerWin = null;
+const bookerWins = new Map(); // id конторы → окно
+let lastBookerId = null;
 let tray = null;
 let timer = null;
 let running = true;
@@ -80,35 +82,103 @@ function createPanelWindow() {
   panelWin.on("closed", () => { panelWin = null; });
 }
 
-// ── окно конторы (открытие + отладка купона) ──────────────────────────────────
-// Отдельная постоянная сессия — логины контор хранятся и не мешают сессии surebet.
-function openBooker(url) {
-  if (!bookerWin || bookerWin.isDestroyed()) {
-    bookerWin = new BrowserWindow({
-      width: 1200,
-      height: 820,
-      title: "Surebet Signal — контора",
-      webPreferences: { partition: "persist:bookers", backgroundThrottling: false },
-    });
-    bookerWin.on("closed", () => { bookerWin = null; });
-  }
-  bookerWin.show();
-  bookerWin.focus();
-  if (url) bookerWin.loadURL(url);
-  return bookerWin;
+// ── антидетект-окно конторы (профиль: сессия + прокси + отпечаток + гео) ───────
+async function applySessionProxy(ses, proxyStr) {
+  const p = parseProxy(proxyStr);
+  if (!p || !p.host || !p.port) { ses.__creds = null; try { await ses.setProxy({ mode: "direct" }); } catch { /* ignore */ } return; }
+  ses.__creds = (p.user || p.pass) ? { user: p.user, pass: p.pass } : null;
+  try { await ses.setProxy({ proxyRules: `${p.scheme}://${p.host}:${p.port}` }); }
+  catch (e) { logger.log("WARN", "booker setProxy:", e); }
 }
 
-// Снять разметку текущей страницы конторы (для отладки купона) → файл в logs/.
+async function openBookerProfile(profile) {
+  if (!profile || !profile.id) return null;
+  const id = profile.id;
+  const partition = "persist:booker-" + id;
+  const ses = session.fromPartition(partition);
+  await applySessionProxy(ses, profile.proxy);
+
+  if (!ses.__hooked) {
+    ses.__hooked = true;
+    ses.on("login", (event, _d, authInfo, cb) => {
+      if (authInfo.isProxy && ses.__creds) { event.preventDefault(); cb(ses.__creds.user, ses.__creds.pass); }
+      else cb();
+    });
+    ses.setPermissionRequestHandler((_wc, perm, cb) => cb(true)); // гео (спуф) и пр. не блокируем
+  }
+
+  let win = bookerWins.get(id);
+  if (!win || win.isDestroyed()) {
+    win = new BrowserWindow({
+      width: 1280, height: 860,
+      title: "Контора — " + (profile.name || id),
+      webPreferences: { partition, backgroundThrottling: false },
+    });
+    bookerWins.set(id, win);
+    win.on("focus", () => { lastBookerId = id; });
+    win.on("closed", () => { bookerWins.delete(id); });
+    try { win.webContents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp"); } catch { /* ignore */ }
+
+    const fp = profile.fp || {};
+    if (fp.ua) { try { win.webContents.setUserAgent(fp.ua); } catch { /* ignore */ } }
+    try {
+      const dbg = win.webContents.debugger;
+      dbg.attach("1.3");
+      await dbg.sendCommand("Page.enable");
+      await dbg.sendCommand("Network.enable");
+      await dbg.sendCommand("Network.setUserAgentOverride", { userAgent: fp.ua || "", acceptLanguage: (fp.languages || ["en-US"]).join(","), platform: fp.platform || "Win32" });
+      if (fp.timezone) await dbg.sendCommand("Emulation.setTimezoneOverride", { timezoneId: fp.timezone }).catch(() => {});
+      if (fp.locale) await dbg.sendCommand("Emulation.setLocaleOverride", { locale: fp.locale }).catch(() => {});
+      if (fp.lat != null && fp.lon != null) await dbg.sendCommand("Emulation.setGeolocationOverride", { latitude: Number(fp.lat), longitude: Number(fp.lon), accuracy: 50 }).catch(() => {});
+      await dbg.sendCommand("Page.addScriptToEvaluateOnNewDocument", { source: buildFingerprintScript(fp) });
+      logger.log("INFO", "контора открыта:", id, "прокси:", profile.proxy ? "да" : "нет", "tz:", fp.timezone);
+    } catch (e) { logger.log("WARN", "booker CDP:", e); }
+  }
+
+  lastBookerId = id;
+  win.show(); win.focus();
+  if (profile.url) win.loadURL(profile.url);
+  return win;
+}
+
+function findBooker(id) { return (settings.bookers || []).find((b) => b.id === id); }
+function activeBookerWin() {
+  let w = lastBookerId && bookerWins.get(lastBookerId);
+  if (w && !w.isDestroyed()) return w;
+  for (const win of bookerWins.values()) if (win && !win.isDestroyed()) return win;
+  return null;
+}
+
+// Краткая сводка интерактивных элементов купона (видимые поля и кнопки) — её удобно
+// скопировать и прислать. Заодно сохраняем полный HTML на всякий случай.
+const BOOKER_SUMMARY_JS = `(() => {
+  const cut = (s, n) => String(s || "").replace(/\\s+/g, " ").trim().slice(0, n);
+  const vis = (e) => e.offsetParent !== null || (e.getClientRects && e.getClientRects().length);
+  const inputs = [...document.querySelectorAll('input, [contenteditable=""], [contenteditable="true"]')]
+    .filter(vis).slice(0, 50)
+    .map((e) => 'INPUT type=' + (e.type || 'text') + ' name=' + (e.name || '-') + ' id=' + (e.id || '-') +
+      ' ph="' + cut(e.placeholder, 30) + '" cls="' + cut(e.className, 70) + '"');
+  const btns = [...document.querySelectorAll('button, [role=button], input[type=submit], a[class*=btn], a[class*=button]')]
+    .filter(vis).slice(0, 80)
+    .map((b) => 'BTN "' + cut(b.innerText || b.value, 35) + '" id=' + (b.id || '-') + ' cls="' + cut(b.className, 70) + '"');
+  return 'URL: ' + location.href + '\\n\\n=== ПОЛЯ ВВОДА (' + inputs.length + ') ===\\n' + inputs.join('\\n') +
+    '\\n\\n=== КНОПКИ (' + btns.length + ') ===\\n' + btns.join('\\n');
+})()`;
+
 async function captureBooker() {
-  if (!bookerWin || bookerWin.isDestroyed()) return { ok: false, error: "окно конторы не открыто" };
+  const win = activeBookerWin();
+  if (!win) return { ok: false, error: "окно конторы не открыто" };
   try {
-    const html = await bookerWin.webContents.executeJavaScript("document.documentElement.outerHTML");
     const dir = logger.dir() || app.getPath("userData");
-    const file = join(dir, `booker-dump-${Date.now()}.html`);
-    require("node:fs").writeFileSync(file, html);
-    logger.log("INFO", "снята разметка конторы:", bookerWin.webContents.getURL(), "→", file);
-    await shell.openPath(dir);
-    return { ok: true, file };
+    const fs = require("node:fs");
+    const summary = await win.webContents.executeJavaScript(BOOKER_SUMMARY_JS);
+    const html = await win.webContents.executeJavaScript("document.documentElement.outerHTML");
+    const sumFile = join(dir, "booker-elements.txt");
+    fs.writeFileSync(sumFile, summary);
+    fs.writeFileSync(join(dir, `booker-dump-${Date.now()}.html`), html);
+    logger.log("INFO", "снята разметка конторы:", win.webContents.getURL());
+    await shell.openPath(sumFile); // откроем саму сводку — скопируешь и пришлёшь
+    return { ok: true, summary, file: sumFile };
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
@@ -363,7 +433,27 @@ ipcMain.handle("open-logs", async () => {
   if (d) await shell.openPath(d);
   return { ok: !!d, dir: d };
 });
-ipcMain.handle("open-booker", (_e, url) => { openBooker(url); return { ok: true }; });
+ipcMain.handle("get-bookers", () => settings.bookers || []);
+ipcMain.handle("save-bookers", (_e, list) => {
+  if (Array.isArray(list)) settings = settingsStore.save({ bookers: list });
+  return settings.bookers || [];
+});
+ipcMain.handle("open-booker", async (_e, id) => {
+  const b = findBooker(id);
+  if (!b) return { ok: false, error: "нет такой конторы" };
+  await openBookerProfile(b);
+  return { ok: true };
+});
+ipcMain.handle("randomize-fp", (_e, id) => {
+  const list = settings.bookers || [];
+  const b = list.find((x) => x.id === id);
+  if (b) {
+    const keep = b.fp || {};
+    b.fp = randomFingerprint({ timezone: keep.timezone, locale: keep.locale, languages: keep.languages, lat: keep.lat, lon: keep.lon });
+    settings = settingsStore.save({ bookers: list });
+  }
+  return b ? b.fp : null;
+});
 ipcMain.handle("capture-booker", async () => await captureBooker());
 
 // ── запуск ────────────────────────────────────────────────────────────────────

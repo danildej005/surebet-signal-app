@@ -1,5 +1,7 @@
 node_modules/
 release/
+# CI-воркфлоу пока не коммитим (токен без scope workflow); релизы собираю вручную
+.github/
 *.log
 smoke.log
 .DS_Store
