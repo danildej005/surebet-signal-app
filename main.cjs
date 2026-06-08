@@ -475,6 +475,10 @@ if (!gotLock) {
       createTray();
       createPanelWindow(); // панель показываем всегда (можно закрыть в трей)
       startLoop();
+      // заранее открываем конторы с «автооткрытием» — чтобы к клику по вилке были залогинены
+      for (const b of (settings.bookers || [])) {
+        if (b && b.autoOpen) openBookerProfile(b).catch((e) => logger.log("WARN", "auto-open booker:", e));
+      }
     } catch (e) {
       logger.log("FATAL", "ошибка инициализации:", e);
     }

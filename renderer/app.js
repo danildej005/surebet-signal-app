@@ -58,6 +58,16 @@ function field(label, value, onchange) {
   i.oninput = () => onchange(i.value);
   return el("label", { textContent: label }, [i]);
 }
+function checkRow(label, checked, onchange) {
+  const c = el("input", { type: "checkbox", checked: !!checked });
+  c.style.width = "auto";
+  c.onchange = () => onchange(c.checked);
+  const wrap = el("label", { className: "muted" }, [c, el("span", { textContent: " " + label })]);
+  wrap.style.display = "flex";
+  wrap.style.alignItems = "center";
+  wrap.style.gap = "6px";
+  return wrap;
+}
 
 async function renderBookers() {
   bookersCache = await window.api.getBookers();
@@ -83,8 +93,9 @@ async function renderBookers() {
 
     const card = el("div", { className: "booker" }, [
       head,
-      field("URL события/сайта", b.url || "", (v) => (b.url = v)),
+      field("Адрес для входа (главная конторы)", b.url || "", (v) => (b.url = v)),
       field("Прокси (host:port[:user:pass])", b.proxy || "", (v) => (b.proxy = v)),
+      checkRow("Открывать при старте (войти заранее)", b.autoOpen, (v) => (b.autoOpen = v)),
       det,
     ]);
     root.append(card);
