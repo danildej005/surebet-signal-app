@@ -12,7 +12,7 @@ const { formatSignal } = require("./lib/format.cjs");
 const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
-const { defaultBookers, randomFingerprint, buildFingerprintScript, bookerForUrl } = require("./lib/bookers.cjs");
+const { defaultBookers, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 
 const SUREBET_URL = "https://su.surebet.com/surebets";
@@ -72,17 +72,24 @@ function createSurebetWindow() {
   // ФАЗА 4: клик по плечу вилки → перехватываем ссылку и открываем нужную контору
   // в её антидетект-окне (залогинено, через прокси), сразу на событии.
   surebetWin.webContents.setWindowOpenHandler(({ url }) => {
-    logger.log("INFO", "клик по плечу surebet → ссылка:", url);
+    logger.log("INFO", "клик по плечу surebet:", String(url).slice(0, 90));
     try {
-      const b = bookerForUrl(url, settings.bookers || []);
-      if (b) {
-        logger.log("INFO", "  → открываю контору:", b.id);
-        openBookerProfile(b, url).catch((e) => logger.log("WARN", "route booker:", e));
-        return { action: "deny" }; // не открываем дефолтное окно
+      // 1) surebet-редирект /nav/.../prong/N/ → контора и событие по индексу плеча
+      const nav = resolveSurebetNav(url, settings.bookers || []);
+      if (nav && nav.booker) {
+        logger.log("INFO", "  → контора:", nav.booker.id, "| событие:", nav.targetUrl);
+        openBookerProfile(nav.booker, nav.targetUrl).catch((e) => logger.log("WARN", "route booker:", e));
+        return { action: "deny" };
       }
-      logger.log("WARN", "  контора по ссылке не распознана — открываю обычным окном");
+      if (nav) logger.log("WARN", "  bk не сопоставлен с профилем:", nav.bk);
+
+      // 2) прямая ссылка на контору (запасной путь)
+      const b = bookerForUrl(url, settings.bookers || []);
+      if (b) { openBookerProfile(b, url).catch(() => {}); return { action: "deny" }; }
+
+      logger.log("WARN", "  не распознал — открываю обычным окном");
     } catch (e) { logger.log("WARN", "windowOpen route:", e); }
-    return { action: "allow" }; // не распознали — пусть откроется как есть (ссылка не потеряется)
+    return { action: "allow" };
   });
 }
 
