@@ -26,6 +26,9 @@ summary { cursor: pointer; }
 .card-toggle { font-size: 14px; font-weight: 600; padding: 2px 0; }
 .card-body { margin-top: 8px; }
 .hint { padding: 0 4px 8px; min-height: 14px; }
+.liverow { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 8px; border: 1px solid #f0c000; background: #fff8e1; border-radius: 8px; margin-bottom: 8px; }
+.liverow input { width: auto; }
+@media (prefers-color-scheme: dark) { .liverow { background: #3a3320; border-color: #7a6500; } }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: #9ca3af; display: inline-block; }
 .dot.on { background: #16a34a; }
 .dot.warn { background: #f59e0b; }

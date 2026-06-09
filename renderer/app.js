@@ -15,6 +15,7 @@ function renderStatus(s) {
   $("lastError").textContent = s.lastError ? "⚠️ " + s.lastError : "";
   if (s.settings) {
     if (s.settings.tgChat && !$("tgChat").value) $("tgChat").value = s.settings.tgChat;
+    if (typeof s.settings.liveMode === "boolean" && document.activeElement !== $("liveMode")) $("liveMode").checked = s.settings.liveMode;
     if (s.settings.tgApiBase && document.activeElement !== $("tgApiBase")) $("tgApiBase").value = s.settings.tgApiBase;
     if (s.settings.proxy !== undefined && document.activeElement !== $("proxy") && !$("proxy").value) $("proxy").value = s.settings.proxy;
     if (s.settings.keyword && document.activeElement !== $("keyword")) $("keyword").value = s.settings.keyword;
@@ -30,6 +31,7 @@ window.api.onStatus(renderStatus);
 
 $("openSurebet").onclick = () => window.api.openSurebet();
 $("openLogs").onclick = () => window.api.openLogs();
+$("liveMode").onchange = () => window.api.saveSettings({ liveMode: $("liveMode").checked });
 $("captureBooker").onclick = async () => {
   $("saveHint").textContent = "снимаю разметку купона…";
   const r = await window.api.captureBooker();
@@ -78,6 +80,21 @@ function selectField(label, value, options, onchange) {
   });
   s.onchange = () => onchange(s.value);
   return el("label", { textContent: label }, [s]);
+}
+
+function fmtPlace(r) {
+  if (!r || !r.ok) return "⚠️ " + ((r && r.error) || "ошибка");
+  const p = [];
+  if (r.selected) p.push("исход: " + r.selected);
+  if (r.selectedOdds != null) {
+    let s = "кэф: " + r.selectedOdds;
+    if (r.expectedOdds) s += " (ждали " + r.expectedOdds + ")";
+    if (r.oddsOk === false) s += " ⚠️УЕХАЛ"; else if (r.oddsOk) s += " ✓";
+    p.push(s);
+  }
+  p.push("сумма: " + r.stakeValue);
+  p.push("кнопка: " + (r.placeBtnText || "НЕ найдена"));
+  return "🧪 " + p.join(" · ");
 }
 
 async function renderBookers() {
@@ -144,16 +161,21 @@ async function renderBookers() {
 
     const stakeBox = el("input", { type: "text", placeholder: "сумма" });
     stakeBox.style.maxWidth = "120px";
-    const dryResult = el("div", { className: "muted", textContent: "сначала выбери исход в купоне, потом жми тест" });
+    const dryResult = el("div", { className: "muted", textContent: "клик по плечу вилки откроет событие; впиши сумму → тест" });
     const dryRow = el("div", {}, [
       el("div", { className: "row" }, [
         stakeBox,
-        el("button", { className: "ghost", textContent: "Тест ставки (dry-run)", onclick: async () => {
+        el("button", { className: "ghost", textContent: "Тест (dry-run)", onclick: async () => {
           dryResult.textContent = "проверяю…";
-          try {
-            const r = await window.api.dryRunPlace(b.id, stakeBox.value.trim() || "10");
-            dryResult.textContent = r.ok ? "🧪 вписал сумму: " + r.stakeValue + " · кнопка ставки: " + (r.placeBtn || "НЕ найдена") : "⚠️ " + r.error;
-          } catch (e) { dryResult.textContent = "⚠️ " + e.message; }
+          try { dryResult.textContent = fmtPlace(await window.api.dryRunPlace(b.id, stakeBox.value.trim() || "10")); }
+          catch (e) { dryResult.textContent = "⚠️ " + e.message; }
+        } }),
+        el("button", { textContent: "ПОСТАВИТЬ ⚡", onclick: async () => {
+          const sum = stakeBox.value.trim() || "10";
+          if (!confirm("РЕАЛЬНО поставить на «" + (b.name || b.id) + "» сумму " + sum + "?")) return;
+          dryResult.textContent = "ставлю…";
+          try { const r = await window.api.placeBet(b.id, sum); dryResult.textContent = (r.placed ? "✅ ПОСТАВЛЕНО · " : "") + fmtPlace(r); }
+          catch (e) { dryResult.textContent = "⚠️ " + e.message; }
         } }),
       ]),
       dryResult,

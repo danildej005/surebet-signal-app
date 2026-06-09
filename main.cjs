@@ -23,6 +23,7 @@ let dedupe = null;
 let surebetWin = null;
 let panelWin = null;
 const bookerWins = new Map(); // id конторы → окно
+const pendingBet = new Map(); // id конторы → { outcomeId, expectedOdds, desc } из последнего клика по плечу
 let lastBookerId = null;
 let tray = null;
 let timer = null;
@@ -77,8 +78,9 @@ function createSurebetWindow() {
       // 1) surebet-редирект /nav/.../prong/N/ → контора и событие по индексу плеча
       const nav = resolveSurebetNav(url, settings.bookers || []);
       if (nav && nav.booker) {
+        pendingBet.set(nav.booker.id, { outcomeId: nav.outcomeId, expectedOdds: nav.expectedOdds, desc: nav.desc });
         const initial = nav.targetUrl || nav.booker.url;
-        logger.log("INFO", "  → контора:", nav.booker.id, "| открываю:", initial);
+        logger.log("INFO", "  → контора:", nav.booker.id, "| исход:", nav.desc, "| кэф:", nav.expectedOdds, "| открываю:", initial);
         openBookerProfile(nav.booker, initial).catch((e) => logger.log("WARN", "route booker:", e));
         // параллельно проходим surebet-редирект → глубокая ссылка события (важно для Betano)
         resolveEventViaNav(url, nav.booker).then((eventUrl) => {
@@ -275,43 +277,72 @@ function normalizeBooker(b) {
   return b;
 }
 
-// Разметка купона по конторе (поле суммы + слова на кнопке постановки).
+// Разметка купона по конторе: поле суммы, слова на кнопке постановки, режим выбора исхода.
 const BETSLIP = {
-  betano: { stake: 'input[id^="stakeInput"]', placeWords: ["BET NOW"] },
-  pinnacle: { stake: 'input[name="stake"]', placeWords: ["CONFIRM", "SINGLE BET"] },
+  betano: { stake: 'input[id^="stakeInput"]', placeWords: ["BET NOW"], outcomeMode: null },
+  pinnacle: { stake: 'input[name="stake"]', placeWords: ["CONFIRM", "SINGLE BET"], outcomeMode: "pinnacle-id" },
 };
+const ODDS_TOLERANCE = 0.05; // допустимое падение кэфа (5%)
 
-// Безопасный dry-run: вписать сумму в купон + найти кнопку постановки. НЕ нажимает.
-async function dryRunPlace(id, stake) {
+// Простановка: авто-выбор исхода (Pinnacle по id из вилки) → чтение/сверка кэфа → ввод суммы.
+// live=false (dry-run) — кнопку НЕ нажимает; live=true — нажимает (боевой режим).
+async function placeBet(id, stake, live = false) {
   const win = bookerWins.get(id);
   if (!win || win.isDestroyed()) return { ok: false, error: "окно конторы не открыто (нажми «Войти»)" };
   const cfg = BETSLIP[id];
   if (!cfg) return { ok: false, error: "нет разметки купона для «" + id + "»" };
+  const bet = pendingBet.get(id) || {};
   const js = `(async () => {
+    const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms));
+    let selected = null, selectedOdds = null;
+    // 1) авто-выбор исхода (Pinnacle — по «хвосту» id из вилки)
+    if (${JSON.stringify(cfg.outcomeMode)} === "pinnacle-id" && ${JSON.stringify(bet.outcomeId || "")}) {
+      const suffix = ${JSON.stringify(bet.outcomeId || "")}.split("|").slice(1).join("|");
+      const btn = [...document.querySelectorAll('[id*="|"]')].find((el) => {
+        const p = el.id.split("|"); return p.length > 1 && p.slice(1).join("|") === suffix;
+      });
+      if (!btn) return { error: "не нашёл исход по id (маркет закрыт / линия изменилась). suffix=" + suffix };
+      const nums = (btn.innerText || "").match(/\\d+\\.\\d+/g);
+      selectedOdds = nums ? Number(nums[nums.length - 1]) : null;
+      selected = (btn.innerText || "").replace(/\\s+/g, " ").trim();
+      btn.click();
+      await SLEEP(700);
+    }
+    // 2) поле суммы
     const inp = document.querySelector(${JSON.stringify(cfg.stake)});
-    if (!inp) return { error: "поле суммы не найдено — сначала выбери исход (добавь в купон)" };
-    try {
-      inp.focus();
-      const oldValue = inp.value;
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-      setter.call(inp, ${JSON.stringify(String(stake))});
-      // хак React: сбросить value-tracker на старое значение, чтобы onChange увидел изменение
-      if (inp._valueTracker) inp._valueTracker.setValue(oldValue);
-      inp.dispatchEvent(new Event("input", { bubbles: true }));
-      inp.dispatchEvent(new Event("change", { bubbles: true }));
-      inp.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
-    } catch (e) { return { error: "не удалось вписать сумму: " + e.message }; }
-    await new Promise((r) => setTimeout(r, 800)); // дать сайту перерисоваться
+    if (!inp) return { error: "поле суммы не найдено — исход не в купоне", selected, selectedOdds };
+    inp.focus();
+    const old = inp.value;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    setter.call(inp, ${JSON.stringify(String(stake))});
+    if (inp._valueTracker) inp._valueTracker.setValue(old);
+    inp.dispatchEvent(new Event("input", { bubbles: true }));
+    inp.dispatchEvent(new Event("change", { bubbles: true }));
+    await SLEEP(800);
+    // 3) кнопка постановки
     const words = ${JSON.stringify(cfg.placeWords)};
-    const btn = [...document.querySelectorAll("button")].find((b) => {
-      const t = (b.innerText || "").toUpperCase();
-      return words.every((w) => t.includes(w.toUpperCase()));
+    const pbtn = [...document.querySelectorAll("button")].find((b) => {
+      const t = (b.innerText || "").toUpperCase(); return words.every((w) => t.includes(w.toUpperCase()));
     });
-    return { ok: true, stakeValue: inp.value, placeBtn: btn ? (btn.innerText || "").replace(/\\s+/g, " ").trim() : null };
+    return { ok: true, selected, selectedOdds, stakeValue: inp.value, placeBtnText: pbtn ? (pbtn.innerText || "").replace(/\\s+/g, " ").trim() : null, hasPlaceBtn: !!pbtn };
   })()`;
   try {
     const r = await win.webContents.executeJavaScript(js);
-    logger.log("INFO", "dry-run", id, JSON.stringify(r));
+    if (r && r.ok) {
+      const exp = bet.expectedOdds;
+      r.expectedOdds = exp || null;
+      r.oddsOk = (exp && r.selectedOdds) ? (r.selectedOdds >= exp * (1 - ODDS_TOLERANCE)) : null;
+      // боевой клик — только если live И кэф ок (или сверять нечего)
+      if (live && r.hasPlaceBtn && r.oddsOk !== false) {
+        await win.webContents.executeJavaScript(`(() => {
+          const words = ${JSON.stringify(cfg.placeWords)};
+          const b = [...document.querySelectorAll("button")].find((x) => { const t=(x.innerText||"").toUpperCase(); return words.every((w)=>t.includes(w.toUpperCase())); });
+          if (b) b.click(); return !!b;
+        })()`);
+        r.placed = true;
+      } else { r.placed = false; }
+    }
+    logger.log("INFO", live ? "PLACE" : "dry-run", id, JSON.stringify(r));
     return r;
   } catch (e) { return { ok: false, error: e.message }; }
 }
@@ -408,6 +439,7 @@ function maskedSettings() {
     proxy: settings.proxy || "",
     pollMs: settings.pollMs,
     keyword: settings.keyword,
+    liveMode: !!settings.liveMode,
     hasToken: !!settings.tgToken,
   };
 }
@@ -599,6 +631,7 @@ ipcMain.handle("save-settings", (_e, patch) => {
   if (typeof patch.proxy === "string") clean.proxy = patch.proxy.trim();
   if (patch.pollMs) clean.pollMs = Math.max(3000, Number(patch.pollMs) || 8000);
   if (patch.keyword) clean.keyword = String(patch.keyword).trim().toLowerCase();
+  if (typeof patch.liveMode === "boolean") clean.liveMode = patch.liveMode;
   settings = settingsStore.save(clean);
   startupSent = false;
   startLoop();
@@ -659,7 +692,11 @@ ipcMain.handle("randomize-fp", (_e, id) => {
   return b ? b.fp : null;
 });
 ipcMain.handle("capture-booker", async (_e, id) => await captureBooker(id));
-ipcMain.handle("dry-run-place", async (_e, id, stake) => await dryRunPlace(id, stake));
+ipcMain.handle("dry-run-place", async (_e, id, stake) => await placeBet(id, stake, false));
+ipcMain.handle("place-bet", async (_e, id, stake) => {
+  if (!settings.liveMode) return { ok: false, error: "боевой режим ВЫКЛ — включи тумблер, чтобы ставить реально" };
+  return await placeBet(id, stake, true);
+});
 
 // ── запуск ────────────────────────────────────────────────────────────────────
 const gotLock = app.requestSingleInstanceLock();
