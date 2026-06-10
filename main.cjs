@@ -81,6 +81,7 @@ function createSurebetWindow() {
         pendingBet.set(nav.booker.id, { outcomeId: nav.outcomeId, expectedOdds: nav.expectedOdds, desc: nav.desc });
         const initial = nav.targetUrl || nav.booker.url;
         logger.log("INFO", "  → контора:", nav.booker.id, "| исход:", nav.desc, "| кэф:", nav.expectedOdds, "| открываю:", initial);
+        try { logger.log("INFO", "  [диаг] descFull:", nav.descFull || "—", "| markers:", JSON.stringify(nav.markers || {}).slice(0, 500)); } catch { /* ignore */ }
         openBookerProfile(nav.booker, initial).catch((e) => logger.log("WARN", "route booker:", e));
         // Проход через surebet-редирект нужен, когда в данных НЕТ ссылки на конкретное событие
         // (Betano = только домен; Pinnacle иногда даёт общий раздел /en/compact/sports).
