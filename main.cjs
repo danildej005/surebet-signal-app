@@ -99,9 +99,15 @@ function createSurebetWindow() {
         }
         return { action: "deny" };
       }
-      if (nav) logger.log("WARN", "  bk не сопоставлен с профилем:", nav.bk);
+      if (nav) {
+        // Это surebet-ссылка плеча, но bk не сопоставлен с профилем. НЕ открываем «по слову
+        // в URL» (bookerForUrl) — в URL лежат ОБА плеча, откроется не та контора и в её окно
+        // загрузится surebet-ссылка → логин surebet. Лучше явно отказать (без misroute).
+        logger.log("WARN", "  bk не сопоставлен с профилем:", nav.bk, "— пропускаю (без misroute)");
+        return { action: "deny" };
+      }
 
-      // 2) прямая ссылка на контору (запасной путь)
+      // 2) прямая ссылка на контору (НЕ surebet-nav) — запасной путь
       const b = bookerForUrl(url, settings.bookers || []);
       if (b) { openBookerProfile(b, url).catch(() => {}); return { action: "deny" }; }
 
