@@ -82,14 +82,21 @@ function createSurebetWindow() {
         const initial = nav.targetUrl || nav.booker.url;
         logger.log("INFO", "  → контора:", nav.booker.id, "| исход:", nav.desc, "| кэф:", nav.expectedOdds, "| открываю:", initial);
         openBookerProfile(nav.booker, initial).catch((e) => logger.log("WARN", "route booker:", e));
-        // параллельно проходим surebet-редирект → глубокая ссылка события (важно для Betano)
-        resolveEventViaNav(url, nav.booker).then((eventUrl) => {
-          if (eventUrl && eventUrl !== initial) {
-            logger.log("INFO", "  глубокая ссылка события:", eventUrl);
-            const w = bookerWins.get(nav.booker.id);
-            if (w && !w.isDestroyed()) w.loadURL(eventUrl);
-          }
-        }).catch((e) => logger.log("WARN", "resolveEventViaNav:", e));
+        // Проход через surebet-редирект нужен ТОЛЬКО если глубокой ссылки нет (Betano = только домен).
+        // Для Pinnacle глубокая ссылка уже в данных → НЕ трогаем surebet (иначе цепляли логин).
+        let hasDeepLink = false;
+        try { const pu = new URL(initial); hasDeepLink = pu.pathname.replace(/\/+$/, "").length > 1; } catch { /* ignore */ }
+        if (!hasDeepLink) {
+          resolveEventViaNav(url, nav.booker).then((eventUrl) => {
+            if (eventUrl && eventUrl !== initial) {
+              logger.log("INFO", "  глубокая ссылка события:", eventUrl);
+              const w = bookerWins.get(nav.booker.id);
+              if (w && !w.isDestroyed()) w.loadURL(eventUrl);
+            }
+          }).catch((e) => logger.log("WARN", "resolveEventViaNav:", e));
+        } else {
+          logger.log("INFO", "  глубокая ссылка уже есть — surebet-редирект пропускаю");
+        }
         return { action: "deny" };
       }
       if (nav) logger.log("WARN", "  bk не сопоставлен с профилем:", nav.bk);
