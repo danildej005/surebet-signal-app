@@ -4,7 +4,7 @@
 > сжатия контекста. Секретов тут НЕТ (токен/прокси-пароли хранятся в приложении шифрованно).
 
 Репозиторий: **github.com/danildej005/surebet-signal-app** (публичный).
-Текущая версия: **0.7.2**. Релизы собираются вручную с Mac, публикуются в GitHub Releases.
+Текущая версия: **0.7.3**. Релизы собираются вручную с Mac, публикуются в GitHub Releases.
 
 ---
 
@@ -20,7 +20,7 @@ Windows-приложение (Electron) для вилок:
 - ✅ Авто-восстановление застрявшего автообновления surebet, watchdog сессии.
 - ✅ Антидетект-окна контор: сессия `persist:booker-<id>`, прокси, отпечаток (UA/таймзона/локаль/гео/WebGL/canvas), WebRTC-защита.
 - ✅ Фаза 4: клик по плечу → разбор surebet-nav → нужная контора на событии.
-- ✅ Фаза 5 (Pinnacle): dry-run + **авто-выбор исхода Pinnacle** по id из вилки (match по «хвосту» id после первого `|`) + чтение/**сверка кэфа** (порог `ODDS_TOLERANCE`=5%) + ввод суммы (React value-tracker). Тумблер **`liveMode`** (выкл по умолч.) + кнопка «ПОСТАВИТЬ» (`placeBet(id,stake,live)`, боевой клик только если liveMode И кэф ок). `pendingBet` пишется с клика по плечу.
+- ✅ Фаза 5 (Pinnacle): dry-run + **авто-выбор исхода** (чистая функция `pickPinnacleOutcome` — по id из вилки ИЛИ по описанию `tr_terse` + ближайшему кэфу, т.к. бренд **ps3838 не даёт id/ссылку**) → клик исхода → **сверка кэфа** (порог `ODDS_TOLERANCE`=5%) → ввод суммы (React value-tracker). Тумблер **`liveMode`** (выкл по умолч.) + кнопка «ПОСТАВИТЬ» (`placeBet(id,stake,live)`, боевой клик только если liveMode И кэф не уехал). `pendingBet` пишется с клика по плечу. Тест на реальных кнопках: `test/pickOutcome.test.cjs`.
 
 ## Дальше (роадмап)
 1. **Betano авто-выбор исхода — по тексту** кнопки `.selections__selection` (id нет): матчить тип/линию/команду из `tr_terse`/`tr_expanded` вилки.
@@ -57,6 +57,7 @@ Windows-приложение (Electron) для вилок:
 - **Pinnacle:** сумма `input[name="stake"]`; кнопка содержит «CONFIRM» + «SINGLE BET» (счётчик N = индикатор регистрации суммы); исход — кнопка `[id="eventId|период|тип|сторона|x|линия"]`, выбранный класс `selected`. Из вилки id берём из `markers.pinnacleBrExternalId`.
 - **Betano:** сумма `input[id^="stakeInput"]`; кнопка «BET NOW»; исходы — `.selections__selection` (текст «Team/Over/Under <линия> <кэф>», без id).
 - **surebet-nav** (ссылка плеча): `https://su.surebet.com/nav/surebet/prong/{N}/.../if?json_body={...}`. `prong/N` = индекс плеча. `json_body.prongs[N]` (строка→JSON) даёт `bk`, `markers.link` (глубокая ссылка), `markers.pinnacleBrExternalId`, `value` (кэф), `tr_terse` (тип ставки). Betano глубокой ссылки в данных не отдаёт → дохождение через `resolveEventViaNav` (скрытое окно на surebet-сессии ловит финальный URL конторы).
+- **Бренд `ps3838` (Pinnacle) присылает минимальные markers** — НЕТ `markers.link` и НЕТ `pinnacleBrExternalId` (только событие через redirect + `tr_terse` + кэф). Поэтому выбор исхода по id невозможен → выбираем по описанию+кэфу (`pickPinnacleOutcome`). Кнопки исходов на странице: `<button>` с `id="eventId|период|тип|сторона|x|линия"` и текстом «`+1.5 1.543`»/«`Over 2.5 Sets 2.550`»/«`Имя 1.709`». Тип в id: 1=победа, 2=фора, 3=тотал. Две кнопки одной форы (+1.5 у обоих игроков) разводятся по кэфу.
 
 ## Релиз (как собирать/публиковать)
 ```

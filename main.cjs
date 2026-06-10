@@ -12,7 +12,7 @@ const { formatSignal } = require("./lib/format.cjs");
 const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
-const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav } = require("./lib/bookers.cjs");
+const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickPinnacleOutcome } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 
 const SUREBET_URL = "https://su.surebet.com/surebets";
@@ -297,33 +297,44 @@ const BETSLIP = {
 };
 const ODDS_TOLERANCE = 0.05; // допустимое падение кэфа (5%)
 
-// Простановка: авто-выбор исхода (Pinnacle по id из вилки) → чтение/сверка кэфа → ввод суммы.
-// live=false (dry-run) — кнопку НЕ нажимает; live=true — нажимает (боевой режим).
+// Простановка: авто-выбор исхода (Pinnacle — по id из вилки или по описанию+кэфу) →
+// сверка кэфа → ввод суммы → (для live) клик постановки. live=false (dry-run) — НЕ нажимает.
 async function placeBet(id, stake, live = false) {
   const win = bookerWins.get(id);
   if (!win || win.isDestroyed()) return { ok: false, error: "окно конторы не открыто (нажми «Войти»)" };
   const cfg = BETSLIP[id];
   if (!cfg) return { ok: false, error: "нет разметки купона для «" + id + "»" };
   const bet = pendingBet.get(id) || {};
+  let selected = null, selectedOdds = null, how = null;
+
+  // 1) авто-выбор исхода (Pinnacle): собрать кнопки со страницы → выбрать чистой функцией → кликнуть.
+  if (cfg.outcomeMode === "pinnacle-id") {
+    let buttons = [];
+    try {
+      buttons = await win.webContents.executeJavaScript(`(() => {
+        const norm = (s) => (s || "").replace(/\\s+/g, " ").trim();
+        return [...document.querySelectorAll('[id*="|"]')].map((el) => ({ id: el.id, text: norm(el.innerText) }));
+      })()`);
+    } catch (e) { return { ok: false, error: "не прочитал кнопки исходов: " + e.message }; }
+    const choice = pickPinnacleOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons });
+    if (!choice) {
+      const r = { ok: false, error: "не нашёл исход на странице (линия/кэф не совпали). desc=" + (bet.desc || "—") + " кэф=" + (bet.expectedOdds || "?") + " кнопок:" + buttons.length };
+      logger.log("WARN", "dry-run/place", id, JSON.stringify(r));
+      return r;
+    }
+    selected = choice.text; selectedOdds = choice.odds; how = choice.how;
+    try {
+      const clicked = await win.webContents.executeJavaScript(`(() => { const el = document.getElementById(${JSON.stringify(choice.id)}); if (el) { el.click(); return true; } return false; })()`);
+      if (!clicked) return { ok: false, error: "кнопка исхода не кликнулась (id=" + choice.id + ")", selected, selectedOdds, how };
+    } catch (e) { return { ok: false, error: "клик исхода: " + e.message, selected, selectedOdds, how }; }
+    await new Promise((r) => setTimeout(r, 800)); // дать купону открыться
+  }
+
+  // 2) ввод суммы (React value-tracker) + поиск кнопки постановки.
   const js = `(async () => {
     const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms));
-    let selected = null, selectedOdds = null;
-    // 1) авто-выбор исхода (Pinnacle — по «хвосту» id из вилки)
-    if (${JSON.stringify(cfg.outcomeMode)} === "pinnacle-id" && ${JSON.stringify(bet.outcomeId || "")}) {
-      const suffix = ${JSON.stringify(bet.outcomeId || "")}.split("|").slice(1).join("|");
-      const btn = [...document.querySelectorAll('[id*="|"]')].find((el) => {
-        const p = el.id.split("|"); return p.length > 1 && p.slice(1).join("|") === suffix;
-      });
-      if (!btn) return { error: "не нашёл исход по id (маркет закрыт / линия изменилась). suffix=" + suffix };
-      const nums = (btn.innerText || "").match(/\\d+\\.\\d+/g);
-      selectedOdds = nums ? Number(nums[nums.length - 1]) : null;
-      selected = (btn.innerText || "").replace(/\\s+/g, " ").trim();
-      btn.click();
-      await SLEEP(700);
-    }
-    // 2) поле суммы
     const inp = document.querySelector(${JSON.stringify(cfg.stake)});
-    if (!inp) return { error: "поле суммы не найдено — исход не в купоне", selected, selectedOdds };
+    if (!inp) return { error: "поле суммы не найдено — исход не в купоне" };
     inp.focus();
     const old = inp.value;
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
@@ -332,32 +343,35 @@ async function placeBet(id, stake, live = false) {
     inp.dispatchEvent(new Event("input", { bubbles: true }));
     inp.dispatchEvent(new Event("change", { bubbles: true }));
     await SLEEP(800);
-    // 3) кнопка постановки
     const words = ${JSON.stringify(cfg.placeWords)};
     const pbtn = [...document.querySelectorAll("button")].find((b) => {
       const t = (b.innerText || "").toUpperCase(); return words.every((w) => t.includes(w.toUpperCase()));
     });
-    return { ok: true, selected, selectedOdds, stakeValue: inp.value, placeBtnText: pbtn ? (pbtn.innerText || "").replace(/\\s+/g, " ").trim() : null, hasPlaceBtn: !!pbtn };
+    return { ok: true, stakeValue: inp.value, placeBtnText: pbtn ? (pbtn.innerText || "").replace(/\\s+/g, " ").trim() : null, hasPlaceBtn: !!pbtn };
   })()`;
   try {
     const r = await win.webContents.executeJavaScript(js);
-    if (r && r.ok) {
-      const exp = bet.expectedOdds;
-      r.expectedOdds = exp || null;
-      r.oddsOk = (exp && r.selectedOdds) ? (r.selectedOdds >= exp * (1 - ODDS_TOLERANCE)) : null;
-      // боевой клик — только если live И кэф ок (или сверять нечего)
-      if (live && r.hasPlaceBtn && r.oddsOk !== false) {
-        await win.webContents.executeJavaScript(`(() => {
-          const words = ${JSON.stringify(cfg.placeWords)};
-          const b = [...document.querySelectorAll("button")].find((x) => { const t=(x.innerText||"").toUpperCase(); return words.every((w)=>t.includes(w.toUpperCase())); });
-          if (b) b.click(); return !!b;
-        })()`);
-        r.placed = true;
-      } else { r.placed = false; }
+    r.selected = selected; r.selectedOdds = selectedOdds; r.how = how;
+    if (r.error) {
+      r.ok = false;
+      logger.log("WARN", "dry-run/place", id, JSON.stringify(r));
+      return r;
     }
+    const exp = bet.expectedOdds;
+    r.expectedOdds = exp || null;
+    r.oddsOk = (exp && r.selectedOdds) ? (r.selectedOdds >= exp * (1 - ODDS_TOLERANCE)) : null;
+    // боевой клик — только если live И кэф не уехал (или сверять нечего)
+    if (live && r.hasPlaceBtn && r.oddsOk !== false) {
+      await win.webContents.executeJavaScript(`(() => {
+        const words = ${JSON.stringify(cfg.placeWords)};
+        const b = [...document.querySelectorAll("button")].find((x) => { const t=(x.innerText||"").toUpperCase(); return words.every((w)=>t.includes(w.toUpperCase())); });
+        if (b) b.click(); return !!b;
+      })()`);
+      r.placed = true;
+    } else { r.placed = false; }
     logger.log("INFO", live ? "PLACE" : "dry-run", id, JSON.stringify(r));
     return r;
-  } catch (e) { return { ok: false, error: e.message }; }
+  } catch (e) { return { ok: false, error: e.message, selected, selectedOdds, how }; }
 }
 
 function findBooker(id) { return (settings.bookers || []).find((b) => b.id === id); }

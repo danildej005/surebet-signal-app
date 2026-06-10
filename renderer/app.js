@@ -83,9 +83,13 @@ function selectField(label, value, options, onchange) {
 }
 
 function fmtPlace(r) {
-  if (!r || !r.ok) return "⚠️ " + ((r && r.error) || "ошибка");
+  if (!r || !r.ok) {
+    let s = "⚠️ " + ((r && r.error) || "ошибка");
+    if (r && r.selected) s += " · (выбран: " + r.selected + ")";
+    return s;
+  }
   const p = [];
-  if (r.selected) p.push("исход: " + r.selected);
+  if (r.selected) p.push("исход: " + r.selected + (r.how === "id" ? " [id]" : r.how === "desc" ? " [по описанию]" : ""));
   if (r.selectedOdds != null) {
     let s = "кэф: " + r.selectedOdds;
     if (r.expectedOdds) s += " (ждали " + r.expectedOdds + ")";
