@@ -32,11 +32,6 @@ window.api.onStatus(renderStatus);
 $("openSurebet").onclick = () => window.api.openSurebet();
 $("openLogs").onclick = () => window.api.openLogs();
 $("liveMode").onchange = () => window.api.saveSettings({ liveMode: $("liveMode").checked });
-$("captureBooker").onclick = async () => {
-  $("saveHint").textContent = "снимаю разметку купона…";
-  const r = await window.api.captureBooker();
-  $("saveHint").textContent = r.ok ? "✅ снято: " + r.file : "⚠️ " + r.error;
-};
 
 // ── конторы (антидетект-профили) ──────────────────────────────────────────────
 let bookersCache = [];

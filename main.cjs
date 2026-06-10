@@ -12,7 +12,7 @@ const { formatSignal } = require("./lib/format.cjs");
 const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
-const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickPinnacleOutcome } = require("./lib/bookers.cjs");
+const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 
 const SUREBET_URL = "https://su.surebet.com/surebets";
@@ -290,14 +290,14 @@ function normalizeBooker(b) {
   return b;
 }
 
-// Разметка купона по конторе: поле суммы, слова на кнопке постановки, режим выбора исхода.
+// Разметка купона по конторе: селектор кнопок-исходов, поле суммы, слова на кнопке постановки.
 const BETSLIP = {
-  betano: { stake: 'input[id^="stakeInput"]', placeWords: ["BET NOW"], outcomeMode: null },
-  pinnacle: { stake: 'input[name="stake"]', placeWords: ["CONFIRM", "SINGLE BET"], outcomeMode: "pinnacle-id" },
+  betano: { outcomeSel: ".selections__selection", stake: 'input[id^="stakeInput"]', placeWords: ["BET NOW"] },
+  pinnacle: { outcomeSel: '[id*="|"]', stake: 'input[name="stake"]', placeWords: ["CONFIRM", "SINGLE BET"] },
 };
 const ODDS_TOLERANCE = 0.05; // допустимое падение кэфа (5%)
 
-// Простановка: авто-выбор исхода (Pinnacle — по id из вилки или по описанию+кэфу) →
+// Простановка: авто-выбор исхода (Pinnacle и Betano — по id из вилки или по описанию+кэфу) →
 // сверка кэфа → ввод суммы → (для live) клик постановки. live=false (dry-run) — НЕ нажимает.
 async function placeBet(id, stake, live = false) {
   const win = bookerWins.get(id);
@@ -307,16 +307,18 @@ async function placeBet(id, stake, live = false) {
   const bet = pendingBet.get(id) || {};
   let selected = null, selectedOdds = null, how = null;
 
-  // 1) авто-выбор исхода (Pinnacle): собрать кнопки со страницы → выбрать чистой функцией → кликнуть.
-  if (cfg.outcomeMode === "pinnacle-id") {
+  // 1) авто-выбор исхода: собрать кнопки-исходы по селектору конторы → выбрать чистой функцией →
+  //    кликнуть по ИНДЕКСУ (id есть только у Pinnacle; у Betano исходы без id).
+  if (cfg.outcomeSel) {
+    const sel = cfg.outcomeSel;
     let buttons = [];
     try {
       buttons = await win.webContents.executeJavaScript(`(() => {
         const norm = (s) => (s || "").replace(/\\s+/g, " ").trim();
-        return [...document.querySelectorAll('[id*="|"]')].map((el) => ({ id: el.id, text: norm(el.innerText) }));
+        return [...document.querySelectorAll(${JSON.stringify(sel)})].map((el, i) => ({ i, id: el.id || "", text: norm(el.innerText) }));
       })()`);
     } catch (e) { return { ok: false, error: "не прочитал кнопки исходов: " + e.message }; }
-    const choice = pickPinnacleOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons });
+    const choice = pickOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons });
     if (!choice) {
       const r = { ok: false, error: "не нашёл исход на странице (линия/кэф не совпали). desc=" + (bet.desc || "—") + " кэф=" + (bet.expectedOdds || "?") + " кнопок:" + buttons.length };
       logger.log("WARN", "dry-run/place", id, JSON.stringify(r));
@@ -324,8 +326,8 @@ async function placeBet(id, stake, live = false) {
     }
     selected = choice.text; selectedOdds = choice.odds; how = choice.how;
     try {
-      const clicked = await win.webContents.executeJavaScript(`(() => { const el = document.getElementById(${JSON.stringify(choice.id)}); if (el) { el.click(); return true; } return false; })()`);
-      if (!clicked) return { ok: false, error: "кнопка исхода не кликнулась (id=" + choice.id + ")", selected, selectedOdds, how };
+      const clicked = await win.webContents.executeJavaScript(`(() => { const els = [...document.querySelectorAll(${JSON.stringify(sel)})]; const el = els[${Number(choice.i)}]; if (el) { el.click(); return true; } return false; })()`);
+      if (!clicked) return { ok: false, error: "кнопка исхода не кликнулась (i=" + choice.i + ")", selected, selectedOdds, how };
     } catch (e) { return { ok: false, error: "клик исхода: " + e.message, selected, selectedOdds, how }; }
     await new Promise((r) => setTimeout(r, 800)); // дать купону открыться
   }
