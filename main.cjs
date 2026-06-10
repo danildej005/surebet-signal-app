@@ -12,7 +12,7 @@ const { formatSignal } = require("./lib/format.cjs");
 const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
-const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome } = require("./lib/bookers.cjs");
+const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 
 const SUREBET_URL = "https://su.surebet.com/surebets";
@@ -82,11 +82,10 @@ function createSurebetWindow() {
         const initial = nav.targetUrl || nav.booker.url;
         logger.log("INFO", "  → контора:", nav.booker.id, "| исход:", nav.desc, "| кэф:", nav.expectedOdds, "| открываю:", initial);
         openBookerProfile(nav.booker, initial).catch((e) => logger.log("WARN", "route booker:", e));
-        // Проход через surebet-редирект нужен ТОЛЬКО если глубокой ссылки нет (Betano = только домен).
-        // Для Pinnacle глубокая ссылка уже в данных → НЕ трогаем surebet (иначе цепляли логин).
-        let hasDeepLink = false;
-        try { const pu = new URL(initial); hasDeepLink = pu.pathname.replace(/\/+$/, "").length > 1; } catch { /* ignore */ }
-        if (!hasDeepLink) {
+        // Проход через surebet-редирект нужен, когда в данных НЕТ ссылки на конкретное событие
+        // (Betano = только домен; Pinnacle иногда даёт общий раздел /en/compact/sports).
+        // Ссылка считается «событием» только если в пути есть числовой id события (см. isEventUrl).
+        if (!isEventUrl(initial)) {
           resolveEventViaNav(url, nav.booker).then((eventUrl) => {
             if (eventUrl && eventUrl !== initial) {
               logger.log("INFO", "  глубокая ссылка события:", eventUrl);
@@ -318,7 +317,8 @@ async function placeBet(id, stake, live = false) {
         return [...document.querySelectorAll(${JSON.stringify(sel)})].map((el, i) => ({ i, id: el.id || "", text: norm(el.innerText) }));
       })()`);
     } catch (e) { return { ok: false, error: "не прочитал кнопки исходов: " + e.message }; }
-    const choice = pickOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons });
+    let eventUrl = ""; try { eventUrl = win.webContents.getURL(); } catch { /* ignore */ }
+    const choice = pickOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons, eventUrl });
     if (!choice) {
       const r = { ok: false, error: "не нашёл исход на странице (линия/кэф не совпали). desc=" + (bet.desc || "—") + " кэф=" + (bet.expectedOdds || "?") + " кнопок:" + buttons.length };
       logger.log("WARN", "dry-run/place", id, JSON.stringify(r));

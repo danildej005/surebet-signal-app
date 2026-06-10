@@ -84,7 +84,7 @@ function fmtPlace(r) {
     return s;
   }
   const p = [];
-  if (r.selected) p.push("исход: " + r.selected + (r.how === "id" ? " [id]" : r.how === "desc" ? " [по описанию]" : ""));
+  if (r.selected) p.push("исход: " + r.selected + (r.how === "id" ? " [id]" : r.how === "name" ? " [имя+линия]" : r.how === "desc" ? " [по описанию]" : ""));
   if (r.selectedOdds != null) {
     let s = "кэф: " + r.selectedOdds;
     if (r.expectedOdds) s += " (ждали " + r.expectedOdds + ")";
