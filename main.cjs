@@ -407,10 +407,10 @@ async function placeBet(id, stake, live = false) {
   //    кликнуть по ИНДЕКСУ (id есть только у Pinnacle; у Betano исходы без id).
   if (cfg.outcomeSel) {
     const sel = cfg.outcomeSel;
-    // Pinnacle: сеты и геймы — в РАЗНЫХ вкладках. Берём единицу из descFull и кликаем нужную
-    // вкладку (+ «Show All»), чтобы нужные исходы прогрузились перед чтением.
+    const unit = marketUnit(bet.descFull); // сеты/геймы — нужно и для вкладки Pinnacle, и для маппинга фора→счёт
+    // Pinnacle: сеты и геймы — в РАЗНЫХ вкладках. Кликаем нужную вкладку (+ «Show All»),
+    // чтобы нужные исходы прогрузились перед чтением.
     if (id === "pinnacle") {
-      const unit = marketUnit(bet.descFull);
       if (unit) {
         try {
           const clicked = await win.webContents.executeJavaScript(`(() => {
@@ -434,7 +434,7 @@ async function placeBet(id, stake, live = false) {
       })()`);
     } catch (e) { return { ok: false, error: "не прочитал кнопки исходов: " + e.message }; }
     let eventUrl = ""; try { eventUrl = win.webContents.getURL(); } catch { /* ignore */ }
-    const choice = pickOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons, eventUrl });
+    const choice = pickOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons, eventUrl, unit });
     if (!choice) {
       const r = { ok: false, error: "не нашёл исход на странице (линия/кэф не совпали). desc=" + (bet.desc || "—") + " кэф=" + (bet.expectedOdds || "?") + " кнопок:" + buttons.length };
       logger.log("WARN", "dry-run/place", id, JSON.stringify(r));

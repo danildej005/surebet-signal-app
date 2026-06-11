@@ -132,6 +132,22 @@ test("счёт 2:1 @4.25 → «2 - 1 4.25»", () => {
   assert.strictEqual(pickOutcome({ desc: "2:1", expectedOdds: 4.25, buttons: BET }).text, "2 - 1 4.25");
 });
 
+// ── Сетовая фора −1.5 ⟺ точный счёт (БО3). Betano: нет форы сетов → берёт счёт ──
+test("Betano: Ф2(−1.5) сеты @2.75 → счёт «0 - 2» (форы сетов нет, есть геймовая −1.5)", () => {
+  // у Betano есть геймовая «-1.5» (Kyrgios -1.5 1.82) и счёт «0 - 2 2.75» — кэф разводит
+  const r = pickOutcome({ desc: "Ф2(-1.5)", expectedOdds: 2.75, buttons: BET, eventUrl: SLUG_T, unit: "set" });
+  assert.strictEqual(r.text, "0 - 2 2.75");
+});
+test("Betano: Ф1(−1.5) сеты @3.60 → счёт «2 - 0»", () => {
+  const r = pickOutcome({ desc: "Ф1(-1.5)", expectedOdds: 3.60, buttons: BET, eventUrl: SLUG_T, unit: "set" });
+  assert.strictEqual(r.text, "2 - 0 3.60");
+});
+test("Pinnacle: Ф2(−1.5) сеты — остаётся форой по кэфу (счёта на странице нет)", () => {
+  // в PINN счёта нет, но есть -1.5 @2.560 → берётся фора
+  const r = pickOutcome({ desc: "Ф2(-1.5)", expectedOdds: 2.560, buttons: PINN, eventUrl: "https://www.pinnacle888.com/en/standard/tennis/x/sho-shimabukuro-vs-nick-kyrgios/1631805342", unit: "set" });
+  assert.strictEqual(r.id, "1631805342|0|2|1|0|-1.5");
+});
+
 // ── СВЕРКА СТОРОНЫ ПО ИМЕНИ (Ф1/П1 = первый игрок из URL события) ────────────
 test("orderPlayers: порядок из URL (player1 первым), даже без «vs» в слаге", () => {
   assert.deepStrictEqual(orderPlayers(SLUG_T, ["Nick Kyrgios", "Sho Shimabukuro"]), ["Sho Shimabukuro", "Nick Kyrgios"]);
