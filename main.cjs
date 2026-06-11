@@ -294,6 +294,17 @@ async function navigateToEventByName(booker, win, subject) {
     const sels = SEARCH_SEL[booker.id];
     if (!sels || !subject) return;
     const surname = (subject.split(/\s+/).filter(Boolean).pop() || subject).toLowerCase();
+    // Pinnacle compact-вид — SPA с пустым для нас DOM (0 ссылок). Переключаемся на standard-вид
+    // (тот же матч, но читаемая разметка — как у Delayed-источника, где всё работает).
+    try {
+      const u = win.webContents.getURL();
+      if (/\/compact\//.test(u)) {
+        const std = u.replace("/compact/", "/standard/");
+        logger.log("INFO", "  [поиск матча] compact→standard:", std);
+        await win.loadURL(std).catch(() => {});
+        await sleep(4000);
+      }
+    } catch { /* ignore */ }
     await sleep(1500); // дать списку прогрузиться
 
     // Один и тот же код гоняем В КАЖДОМ ФРЕЙМЕ (compact-вид Pinnacle держит список во iframe):
