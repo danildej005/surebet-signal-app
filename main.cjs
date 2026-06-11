@@ -293,10 +293,15 @@ async function navigateToEventByName(booker, win, subject) {
   try {
     const sels = SEARCH_SEL[booker.id];
     if (!sels || !subject) return;
-    const surname = subject.split(/\s+/).filter(Boolean).pop() || subject;
+    const surname = (subject.split(/\s+/).filter(Boolean).pop() || subject).toLowerCase();
     await sleep(1500); // дать списку прогрузиться
-    const js = `(async () => {
+
+    // Один и тот же код гоняем В КАЖДОМ ФРЕЙМЕ (compact-вид Pinnacle держит список во iframe):
+    // вводим имя в поиск (если поле в этом фрейме есть) → ищем строку/ссылку матча по имени →
+    // кликаем (ссылку по href — приоритетно). Возвращаем диагностику, даже если не кликнули.
+    const code = `(async () => {
       const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms));
+      const NAME = ${JSON.stringify(surname)};
       const inp = ${JSON.stringify(sels)}.map((s) => document.querySelector(s)).find(Boolean);
       if (inp) {
         inp.focus();
@@ -304,24 +309,32 @@ async function navigateToEventByName(booker, win, subject) {
         set.call(inp, ${JSON.stringify(subject)});
         inp.dispatchEvent(new Event("input", { bubbles: true }));
         inp.dispatchEvent(new Event("keyup", { bubbles: true }));
+        await SLEEP(1900);
       }
-      await SLEEP(1800);
-      const NAME = ${JSON.stringify(surname)}.toLowerCase();
-      const els = [...document.querySelectorAll("a, [class*=event], [class*=game], [class*=match], [class*=row], [onclick]")]
-        .filter((e) => e.offsetParent !== null && (e.innerText || "").toLowerCase().includes(NAME));
-      // самый «глубокий» (мелкий) кликабельный элемент с именем — обычно строка матча
-      els.sort((a, b) => (a.innerText || "").length - (b.innerText || "").length);
-      const hit = els[0];
-      if (hit) { hit.click(); return { ok: true, hadInput: !!inp, text: (hit.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 80), found: els.length }; }
-      return { ok: false, hadInput: !!inp, found: 0 };
+      const links = [...document.querySelectorAll("a[href]")];
+      const linkHit = links.find((a) => (a.innerText || "").toLowerCase().includes(NAME));
+      const named = [...document.querySelectorAll("a,[onclick],[class*=event],[class*=game],[class*=match],[class*=row]")]
+        .filter((e) => e.offsetParent !== null && (e.innerText || "").toLowerCase().includes(NAME))
+        .sort((a, b) => (a.innerText || "").length - (b.innerText || "").length);
+      let clicked = false, how = null, href = null, text = null;
+      if (linkHit) { href = linkHit.getAttribute("href"); text = (linkHit.innerText || "").replace(/\\s+/g, " ").slice(0, 60); linkHit.click(); clicked = true; how = "link"; }
+      else if (named[0]) { text = (named[0].innerText || "").replace(/\\s+/g, " ").slice(0, 60); named[0].click(); clicked = true; how = "el"; }
+      return { hadInput: !!inp, links: links.length, named: named.length, clicked, how, href, text };
     })()`;
-    const r = await win.webContents.executeJavaScript(js).catch((e) => ({ error: e.message }));
-    logger.log("INFO", "  [поиск матча]", booker.id, "subject:", subject, "→", JSON.stringify(r));
+
+    let frames = [];
+    try { frames = win.webContents.mainFrame.framesInSubtree; } catch { frames = [win.webContents.mainFrame]; }
+    logger.log("INFO", "  [поиск матча] фреймов:", frames.length);
+    for (const f of frames) {
+      let r; try { r = await f.executeJavaScript(code); } catch (e) { r = { error: e.message }; }
+      let furl = ""; try { furl = (f.url || "").slice(0, 55); } catch { /* ignore */ }
+      logger.log("INFO", "  [поиск матча] frame:", furl, "→", JSON.stringify(r));
+      if (r && r.clicked) break;
+    }
     for (let i = 0; i < 8; i++) {
       await sleep(1000);
       if (win.isDestroyed()) return;
-      const u = win.webContents.getURL();
-      if (isEventUrl(u)) { logger.log("INFO", "  событие найдено по имени:", u); return; }
+      if (isEventUrl(win.webContents.getURL())) { logger.log("INFO", "  событие найдено по имени:", win.webContents.getURL()); return; }
     }
     logger.log("WARN", "  событие по имени не открылось (subject:", subject + ")");
   } catch (e) { logger.log("WARN", "navigateToEventByName:", e); }
