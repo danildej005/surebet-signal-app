@@ -15,7 +15,17 @@ const settingsStore = require("./lib/settings.cjs");
 const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+let fxRate = { rate: fx.FALLBACK, source: "fallback", at: 0, stale: true };
+async function refreshFx() {
+  try {
+    fxRate = await fx.fetchUsdToEur();
+    logger.log("INFO", "курс USD→EUR:", fxRate.rate, "(" + fxRate.source + ")");
+    if (panelWin && !panelWin.isDestroyed()) panelWin.webContents.send("fx", fxRate);
+  } catch (e) { logger.log("WARN", "курс:", e.message); }
+}
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
+const fx = require("./lib/fx.cjs");
 
 const SUREBET_URL = "https://su.surebet.com/surebets";
 const PARTITION = "persist:surebet"; // постоянная сессия → логин сохраняется
@@ -294,17 +304,6 @@ async function navigateToEventByName(booker, win, subject) {
     const sels = SEARCH_SEL[booker.id];
     if (!sels || !subject) return;
     const surname = (subject.split(/\s+/).filter(Boolean).pop() || subject).toLowerCase();
-    // Pinnacle compact-вид — SPA с пустым для нас DOM (0 ссылок). Переключаемся на standard-вид
-    // (тот же матч, но читаемая разметка — как у Delayed-источника, где всё работает).
-    try {
-      const u = win.webContents.getURL();
-      if (/\/compact\//.test(u)) {
-        const std = u.replace("/compact/", "/standard/");
-        logger.log("INFO", "  [поиск матча] compact→standard:", std);
-        await win.loadURL(std).catch(() => {});
-        await sleep(4000);
-      }
-    } catch { /* ignore */ }
     await sleep(1500); // дать списку прогрузиться
 
     // Один и тот же код гоняем В КАЖДОМ ФРЕЙМЕ (compact-вид Pinnacle держит список во iframe):
@@ -490,8 +489,15 @@ const BOOKER_SUMMARY_JS = `(() => {
   const btns = [...document.querySelectorAll('button, [role=button], input[type=submit], a[class*=btn], a[class*=button]')]
     .filter(vis).slice(0, 80)
     .map((b) => 'BTN "' + cut(b.innerText || b.value, 35) + '" id=' + (b.id || '-') + ' cls="' + cut(b.className, 70) + '"');
+  // элементы, где может быть МАКСИМУМ ставки: текст с max/min/limit/лимит/макс (+ рядом число)
+  const limRe = /\\b(max|min|limit|лимит|макс|мин)\\b/i;
+  const lims = [...document.querySelectorAll('span,div,small,label,p,td,button,a')]
+    .filter((e) => vis(e) && limRe.test(e.innerText || '') && (e.children.length === 0 || (e.innerText || '').length < 60))
+    .slice(0, 40)
+    .map((e) => 'LIM <' + e.tagName.toLowerCase() + '> "' + cut(e.innerText, 50) + '" cls="' + cut(e.className, 50) + '"');
   return 'URL: ' + location.href + '\\n\\n=== ПОЛЯ ВВОДА (' + inputs.length + ') ===\\n' + inputs.join('\\n') +
-    '\\n\\n=== КНОПКИ (' + btns.length + ') ===\\n' + btns.join('\\n');
+    '\\n\\n=== КНОПКИ (' + btns.length + ') ===\\n' + btns.join('\\n') +
+    '\\n\\n=== ЛИМИТЫ/MAX (' + lims.length + ') ===\\n' + lims.join('\\n');
 })()`;
 
 async function captureBooker(id) {
@@ -651,7 +657,11 @@ function sendTgNet(text, { timeoutMs = 15000 } = {}) {
   });
 }
 
+// Пересылка в Telegram ЗАМОРОЖЕНА (фокус на простановке вилок). Код ниже сохранён,
+// чтобы при необходимости вернуть — снять заморозку = убрать ранний return.
+const TELEGRAM_FROZEN = true;
 async function tg(text) {
+  if (TELEGRAM_FROZEN) return { ok: false, error: "telegram заморожен" };
   if (!settings.tgToken || !settings.tgChat) return { ok: false, error: "не заданы токен/chat_id" };
   await ensureTgProxy();
   return sendTgNet(text);
@@ -814,6 +824,7 @@ ipcMain.handle("randomize-fp", (_e, id) => {
   }
   return b ? b.fp : null;
 });
+ipcMain.handle("get-fx", async () => { await refreshFx(); return fxRate; });
 ipcMain.handle("capture-booker", async (_e, id) => await captureBooker(id));
 ipcMain.handle("dry-run-place", async (_e, id, stake) => await placeBet(id, stake, false));
 ipcMain.handle("place-bet", async (_e, id, stake) => {
@@ -840,6 +851,8 @@ if (!gotLock) {
       createTray();
       createPanelWindow(); // панель показываем всегда (можно закрыть в трей)
       startLoop();
+      refreshFx(); // подтянуть курс USD→EUR (для калькулятора вилки)
+      setInterval(refreshFx, 60 * 60 * 1000); // освежать раз в час (внутри есть кэш на 6ч)
       // заранее открываем конторы с «автооткрытием» — чтобы к клику по вилке были залогинены
       for (const b of (settings.bookers || [])) {
         if (b && b.autoOpen) openBookerProfile(b).catch((e) => logger.log("WARN", "auto-open booker:", e));
