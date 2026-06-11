@@ -1,7 +1,18 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { vilkaStakes } = require("../lib/vilka.cjs");
+const { vilkaStakes, parseMoney } = require("../lib/vilka.cjs");
+
+test("parseMoney: US и EU форматы, с валютой/мусором", () => {
+  assert.strictEqual(parseMoney("Max bet USDT 10,035.00"), 10035);   // Pinnacle (US)
+  assert.strictEqual(parseMoney("10.000,00 €"), 10000);              // Betano (EU)
+  assert.strictEqual(parseMoney("10000"), 10000);
+  assert.strictEqual(parseMoney("1,000"), 1000);                     // тысячи (US без копеек)
+  assert.strictEqual(parseMoney("99,50"), 99.5);                     // EU копейки
+  assert.strictEqual(parseMoney("1.234.567,89"), 1234567.89);
+  assert.strictEqual(parseMoney(""), null);
+  assert.strictEqual(parseMoney("—"), null);
+});
 
 test("упор в максимум конторы (без лимита панели): USD-плечо ограничивает", () => {
   const r = vilkaStakes({ oddsEur: 2.0, oddsUsd: 2.1, usdToEur: 0.92, maxEur: 500, maxUsd: 400 });

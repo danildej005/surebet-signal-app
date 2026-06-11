@@ -15,6 +15,7 @@ const settingsStore = require("./lib/settings.cjs");
 const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 const fx = require("./lib/fx.cjs");
+const { parseMoney } = require("./lib/vilka.cjs");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -370,6 +371,28 @@ const BETSLIP = {
 };
 const ODDS_TOLERANCE = 0.05; // допустимое падение кэфа (5%)
 
+// Чтение максимума ставки из купона (в валюте конторы: Pinnacle USDT≈USD, Betano EUR).
+// Pinnacle печатает «Max bet USDT 10,035.00» под полем суммы — читаем текст.
+// Betano прячет за кнопкой MAX — кликаем её, она вписывает макс в поле, читаем поле.
+const PINN_MAX_JS = `(() => {
+  const el = [...document.querySelectorAll('div,span,p')].find((e) => /max\\s*bet/i.test(e.innerText || '') && /\\d/.test(e.innerText || ''));
+  return el ? (el.innerText || '').replace(/\\s+/g, ' ').trim() : null;
+})()`;
+const BETANO_MAX_JS = `(async () => {
+  const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms));
+  const btn = document.querySelector('.max-button') || [...document.querySelectorAll('button')].find((b) => (b.innerText || '').trim().toUpperCase() === 'MAX');
+  if (!btn) return null;
+  btn.click(); await SLEEP(700);
+  const inp = document.querySelector('input[id^="stakeInput"]');
+  return inp ? inp.value : null;
+})()`;
+async function readBookmakerMax(win, id) {
+  const js = id === "pinnacle" ? PINN_MAX_JS : id === "betano" ? BETANO_MAX_JS : null;
+  if (!js) return null;
+  try { const raw = await win.webContents.executeJavaScript(js); const n = parseMoney(raw); return n > 0 ? n : null; }
+  catch (e) { logger.log("WARN", "чтение макса:", id, e.message); return null; }
+}
+
 // Простановка: авто-выбор исхода (Pinnacle и Betano — по id из вилки или по описанию+кэфу) →
 // сверка кэфа → ввод суммы → (для live) клик постановки. live=false (dry-run) — НЕ нажимает.
 async function placeBet(id, stake, live = false) {
@@ -425,6 +448,11 @@ async function placeBet(id, stake, live = false) {
     await new Promise((r) => setTimeout(r, 800)); // дать купону открыться
   }
 
+  // 1.5) читаем МАКСИМУМ ставки конторы (для калькулятора вилки). Betano: клик MAX впишет макс
+  //      в поле — поэтому читаем ДО ввода нашей суммы (наша сумма ниже перезапишет поле).
+  let maxStake = null;
+  if (cfg.outcomeSel) { maxStake = await readBookmakerMax(win, id); }
+
   // 2) ввод суммы (React value-tracker) + поиск кнопки постановки.
   const js = `(async () => {
     const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -446,7 +474,7 @@ async function placeBet(id, stake, live = false) {
   })()`;
   try {
     const r = await win.webContents.executeJavaScript(js);
-    r.selected = selected; r.selectedOdds = selectedOdds; r.how = how;
+    r.selected = selected; r.selectedOdds = selectedOdds; r.how = how; r.maxStake = maxStake;
     if (r.error) {
       r.ok = false;
       logger.log("WARN", "dry-run/place", id, JSON.stringify(r));

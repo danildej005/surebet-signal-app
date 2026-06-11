@@ -94,6 +94,7 @@ function fmtPlace(r) {
     p.push(s);
   }
   p.push("сумма: " + r.stakeValue);
+  if (r.maxStake != null) p.push("макс: " + r.maxStake);
   p.push("кнопка: " + (r.placeBtnText || "НЕ найдена"));
   return "🧪 " + p.join(" · ");
 }
