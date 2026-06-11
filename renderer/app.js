@@ -15,7 +15,15 @@ function renderStatus(s) {
   $("lastError").textContent = s.lastError ? "⚠️ " + s.lastError : "";
   if (s.settings && typeof s.settings.liveMode === "boolean" && document.activeElement !== $("liveMode")) {
     $("liveMode").checked = s.settings.liveMode;
+    updateBotBtn();
   }
+  if (s.settings && s.settings.vilkaLimitEur != null && document.activeElement !== $("vilkaLimit") && !$("vilkaLimit").value) {
+    if (s.settings.vilkaLimitEur > 0) $("vilkaLimit").value = s.settings.vilkaLimitEur;
+  }
+}
+function updateBotBtn() {
+  const live = $("liveMode").checked;
+  $("runBot").textContent = live ? "▶ Запуск бота ⚡БОЕВОЙ" : "▶ Запуск бота (dry-run)";
 }
 
 async function refresh() { renderStatus(await window.api.getStatus()); }
@@ -24,7 +32,7 @@ window.api.onStatus(renderStatus);
 
 $("openSurebet").onclick = () => window.api.openSurebet();
 $("openLogs").onclick = () => window.api.openLogs();
-$("liveMode").onchange = () => window.api.saveSettings({ liveMode: $("liveMode").checked });
+$("liveMode").onchange = () => { window.api.saveSettings({ liveMode: $("liveMode").checked }); updateBotBtn(); };
 
 function showFx(r) {
   if (!r || !$("fxRate")) return;
@@ -34,6 +42,32 @@ function showFx(r) {
 }
 if (window.api.getFx) window.api.getFx().then(showFx).catch(() => {});
 if (window.api.onFx) window.api.onFx(showFx);
+
+// лимит вилки на плечо (€) — сохраняем при изменении
+$("vilkaLimit").onchange = () => window.api.saveSettings({ vilkaLimitEur: Number($("vilkaLimit").value) || 0 });
+
+function fmtLeg(name, l) {
+  if (!l) return name + ": —";
+  const ok = l.oddsOk === false ? " ⚠️УЕХАЛ" : (l.oddsOk ? " ✓" : "");
+  return name + ": " + (l.selected || "?") + " · кэф " + (l.odds ?? "?") + ok +
+    " · ставка " + (l.stake ?? "?") + " (вписано " + (l.stakeValue ?? "?") + ")" +
+    " · макс " + (l.max ?? "?") + " · кнопка: " + (l.placeBtn || "—");
+}
+function fmtBot(r) {
+  if (!r) return "—";
+  if (!r.ok) return "⚠️ " + (r.error || "ошибка") + (r.calc ? " · профит " + r.calc.profitPct + "%" : "");
+  const head = (r.placed ? "✅ ПОСТАВЛЕНО · " : "🧪 dry-run · ") +
+    "профит " + r.profitPct + "% (" + r.profitEur + "€ с " + r.totalEur + "€) · курс " + r.rate;
+  return head + "\n  " + fmtLeg("Betano", r.betano) + "\n  " + fmtLeg("Pinnacle", r.pinnacle);
+}
+$("runBot").onclick = async () => {
+  const live = $("liveMode").checked;
+  $("botResult").textContent = "бот работает: ищу вилку, открываю плечи, считаю…";
+  $("runBot").disabled = true;
+  try { $("botResult").textContent = fmtBot(await window.api.runBot(live)); }
+  catch (e) { $("botResult").textContent = "⚠️ " + e.message; }
+  $("runBot").disabled = false;
+};
 
 // ── конторы (антидетект-профили) ──────────────────────────────────────────────
 let bookersCache = [];

@@ -29,6 +29,11 @@
     <h2>Конторы (антидетект)</h2>
     <label class="liverow"><input type="checkbox" id="liveMode" /> <b>⚡ БОЕВОЙ режим</b> — реальные ставки (по умолчанию ВЫКЛ = dry-run)</label>
     <div class="muted" id="fxLine">Курс USD→EUR: <b id="fxRate">…</b> <span id="fxSrc"></span></div>
+    <div class="row" style="margin:8px 0; gap:8px; align-items:flex-end;">
+      <label style="flex:0 0 160px; margin:0;">Лимит вилки на плечо, €<input id="vilkaLimit" type="number" min="0" step="1" placeholder="без лимита" /></label>
+      <button id="runBot">▶ Запуск бота (dry-run)</button>
+    </div>
+    <div class="muted" id="botResult" style="white-space:pre-wrap;"></div>
     <div id="bookers"></div>
     <div class="muted">У каждой конторы — своя сессия, прокси и отпечаток. «Войти» открывает её окно; логин сохраняется. Клик по плечу вилки откроет событие → впиши сумму → «Тест (dry-run)». Кнопка «Снять купон» на карточке — снимок разметки конторы (для отладки).</div>
   </section>

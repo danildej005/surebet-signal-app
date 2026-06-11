@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("api", {
   dryRunPlace: (id, stake) => ipcRenderer.invoke("dry-run-place", id, stake),
   placeBet: (id, stake) => ipcRenderer.invoke("place-bet", id, stake),
   getFx: () => ipcRenderer.invoke("get-fx"),
+  runBot: (live) => ipcRenderer.invoke("run-bot", live),
   onStatus: (cb) => ipcRenderer.on("status", (_e, s) => cb(s)),
   onFx: (cb) => ipcRenderer.on("fx", (_e, r) => cb(r)),
 });

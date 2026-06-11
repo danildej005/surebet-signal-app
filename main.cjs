@@ -88,48 +88,14 @@ function createSurebetWindow() {
   surebetWin.webContents.setWindowOpenHandler(({ url }) => {
     logger.log("INFO", "клик по плечу surebet:", String(url).slice(0, 90));
     try {
-      // 1) surebet-редирект /nav/.../prong/N/ → контора и событие по индексу плеча
       const nav = resolveSurebetNav(url, settings.bookers || []);
-      if (nav && nav.booker) {
-        pendingBet.set(nav.booker.id, { outcomeId: nav.outcomeId, expectedOdds: nav.expectedOdds, desc: nav.desc, descFull: nav.descFull });
-        const initial = nav.targetUrl || nav.booker.url;
-        logger.log("INFO", "  → контора:", nav.booker.id, "| исход:", nav.desc, "| кэф:", nav.expectedOdds, "| открываю:", initial);
-        try { logger.log("INFO", "  [диаг] descFull:", nav.descFull || "—", "| markers:", JSON.stringify(nav.markers || {}).slice(0, 500)); } catch { /* ignore */ }
-        openBookerProfile(nav.booker, initial).catch((e) => logger.log("WARN", "route booker:", e));
-        // Проход через surebet-редирект нужен, когда в данных НЕТ ссылки на конкретное событие
-        // (Betano = только домен; Pinnacle иногда даёт общий раздел /en/compact/sports).
-        // Ссылка считается «событием» только если в пути есть числовой id события (см. isEventUrl).
-        if (!isEventUrl(initial)) {
-          const subject = extractSubject(nav.descFull) || extractSubject(nav.desc);
-          resolveEventViaNav(url, nav.booker).then(async (eventUrl) => {
-            const w = bookerWins.get(nav.booker.id);
-            if (eventUrl && eventUrl !== initial) {
-              logger.log("INFO", "  глубокая ссылка события:", eventUrl);
-              if (w && !w.isDestroyed()) w.loadURL(eventUrl);
-            }
-            // Если редирект довёл только до раздела (не событие) — ищем матч по имени игрока.
-            const reached = (eventUrl && eventUrl !== initial) ? eventUrl : initial;
-            if (!isEventUrl(reached) && w && !w.isDestroyed() && subject) {
-              await navigateToEventByName(nav.booker, w, subject);
-            }
-          }).catch((e) => logger.log("WARN", "resolveEventViaNav:", e));
-        } else {
-          logger.log("INFO", "  глубокая ссылка уже есть — surebet-редирект пропускаю");
-        }
-        return { action: "deny" };
-      }
-      if (nav) {
-        // Это surebet-ссылка плеча, но bk не сопоставлен с профилем. НЕ открываем «по слову
-        // в URL» (bookerForUrl) — в URL лежат ОБА плеча, откроется не та контора и в её окно
-        // загрузится surebet-ссылка → логин surebet. Лучше явно отказать (без misroute).
-        logger.log("WARN", "  bk не сопоставлен с профилем:", nav.bk, "— пропускаю (без misroute)");
-        return { action: "deny" };
-      }
-
+      // 1) surebet-ссылка плеча с распознанной конторой → открыть событие (routeLeg, общий путь с ботом)
+      if (nav && nav.booker) { routeLeg(url).catch((e) => logger.log("WARN", "routeLeg:", e)); return { action: "deny" }; }
+      // bk не сопоставлен — НЕ открываем по слову в URL (там оба плеча), иначе откроется не та контора
+      if (nav) { logger.log("WARN", "  bk не сопоставлен с профилем:", nav.bk, "— пропускаю (без misroute)"); return { action: "deny" }; }
       // 2) прямая ссылка на контору (НЕ surebet-nav) — запасной путь
       const b = bookerForUrl(url, settings.bookers || []);
       if (b) { openBookerProfile(b, url).catch(() => {}); return { action: "deny" }; }
-
       logger.log("WARN", "  не распознал — открываю обычным окном");
     } catch (e) { logger.log("WARN", "windowOpen route:", e); }
     return { action: "allow" };
@@ -393,38 +359,31 @@ async function readBookmakerMax(win, id) {
   catch (e) { logger.log("WARN", "чтение макса:", id, e.message); return null; }
 }
 
-// Простановка: авто-выбор исхода (Pinnacle и Betano — по id из вилки или по описанию+кэфу) →
-// сверка кэфа → ввод суммы → (для live) клик постановки. live=false (dry-run) — НЕ нажимает.
-async function placeBet(id, stake, live = false) {
+// === Шаги простановки (переиспользуются в placeBet ОДНОГО плеча и в оркестраторе runBot) ===
+
+// Шаг 1: выбрать исход в купоне конторы + прочитать максимум. Сумму НЕ вписывает.
+async function selectLegOutcome(id) {
   const win = bookerWins.get(id);
-  if (!win || win.isDestroyed()) return { ok: false, error: "окно конторы не открыто (нажми «Войти»)" };
+  if (!win || win.isDestroyed()) return { ok: false, error: "окно конторы не открыто" };
   const cfg = BETSLIP[id];
-  if (!cfg) return { ok: false, error: "нет разметки купона для «" + id + "»" };
+  if (!cfg) return { ok: false, error: "нет разметки купона «" + id + "»" };
   const bet = pendingBet.get(id) || {};
   let selected = null, selectedOdds = null, how = null;
-
-  // 1) авто-выбор исхода: собрать кнопки-исходы по селектору конторы → выбрать чистой функцией →
-  //    кликнуть по ИНДЕКСУ (id есть только у Pinnacle; у Betano исходы без id).
   if (cfg.outcomeSel) {
     const sel = cfg.outcomeSel;
-    const unit = marketUnit(bet.descFull); // сеты/геймы — нужно и для вкладки Pinnacle, и для маппинга фора→счёт
-    // Pinnacle: сеты и геймы — в РАЗНЫХ вкладках. Кликаем нужную вкладку (+ «Show All»),
-    // чтобы нужные исходы прогрузились перед чтением.
-    if (id === "pinnacle") {
-      if (unit) {
-        try {
-          const clicked = await win.webContents.executeJavaScript(`(() => {
-            const tabId = ${JSON.stringify(unit === "set" ? "set-markets" : "game-markets")};
-            const txt = ${JSON.stringify(unit === "set" ? "SET MARKETS" : "GAME MARKETS")};
-            const tab = document.getElementById(tabId) || [...document.querySelectorAll("button,[role=button]")].find((b) => (b.innerText || "").trim().toUpperCase() === txt);
-            if (tab) tab.click();
-            const all = document.querySelector(".btn-toggle-all"); if (all) all.click();
-            return !!tab;
-          })()`);
-          logger.log("INFO", "  [рынок] Pinnacle вкладка:", unit, "клик:", clicked);
-          await sleep(1300);
-        } catch (e) { logger.log("WARN", "tab click:", e); }
-      }
+    const unit = marketUnit(bet.descFull); // сеты/геймы — для вкладки Pinnacle и маппинга фора→счёт
+    if (id === "pinnacle" && unit) { // сеты и геймы — в РАЗНЫХ вкладках: открываем нужную (+ Show All)
+      try {
+        await win.webContents.executeJavaScript(`(() => {
+          const tabId = ${JSON.stringify(unit === "set" ? "set-markets" : "game-markets")};
+          const txt = ${JSON.stringify(unit === "set" ? "SET MARKETS" : "GAME MARKETS")};
+          const tab = document.getElementById(tabId) || [...document.querySelectorAll("button,[role=button]")].find((b) => (b.innerText || "").trim().toUpperCase() === txt);
+          if (tab) tab.click();
+          const all = document.querySelector(".btn-toggle-all"); if (all) all.click();
+          return !!tab;
+        })()`);
+        await sleep(1300);
+      } catch (e) { logger.log("WARN", "tab click:", e); }
     }
     let buttons = [];
     try {
@@ -432,28 +391,25 @@ async function placeBet(id, stake, live = false) {
         const norm = (s) => (s || "").replace(/\\s+/g, " ").trim();
         return [...document.querySelectorAll(${JSON.stringify(sel)})].map((el, i) => ({ i, id: el.id || "", text: norm(el.innerText) }));
       })()`);
-    } catch (e) { return { ok: false, error: "не прочитал кнопки исходов: " + e.message }; }
+    } catch (e) { return { ok: false, win, cfg, bet, error: "не прочитал кнопки исходов: " + e.message }; }
     let eventUrl = ""; try { eventUrl = win.webContents.getURL(); } catch { /* ignore */ }
     const choice = pickOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons, eventUrl, unit });
-    if (!choice) {
-      const r = { ok: false, error: "не нашёл исход на странице (линия/кэф не совпали). desc=" + (bet.desc || "—") + " кэф=" + (bet.expectedOdds || "?") + " кнопок:" + buttons.length };
-      logger.log("WARN", "dry-run/place", id, JSON.stringify(r));
-      return r;
-    }
+    if (!choice) return { ok: false, win, cfg, bet, error: "не нашёл исход (линия/кэф). desc=" + (bet.desc || "—") + " кэф=" + (bet.expectedOdds || "?") + " кнопок:" + buttons.length };
     selected = choice.text; selectedOdds = choice.odds; how = choice.how;
     try {
       const clicked = await win.webContents.executeJavaScript(`(() => { const els = [...document.querySelectorAll(${JSON.stringify(sel)})]; const el = els[${Number(choice.i)}]; if (el) { el.click(); return true; } return false; })()`);
-      if (!clicked) return { ok: false, error: "кнопка исхода не кликнулась (i=" + choice.i + ")", selected, selectedOdds, how };
-    } catch (e) { return { ok: false, error: "клик исхода: " + e.message, selected, selectedOdds, how }; }
-    await new Promise((r) => setTimeout(r, 800)); // дать купону открыться
+      if (!clicked) return { ok: false, win, cfg, bet, selected, selectedOdds, how, error: "кнопка исхода не кликнулась (i=" + choice.i + ")" };
+    } catch (e) { return { ok: false, win, cfg, bet, selected, selectedOdds, how, error: "клик исхода: " + e.message }; }
+    await sleep(800);
   }
+  const maxStake = cfg.outcomeSel ? await readBookmakerMax(win, id) : null;
+  const exp = bet.expectedOdds;
+  const oddsOk = (exp && selectedOdds) ? (selectedOdds >= exp * (1 - ODDS_TOLERANCE)) : null;
+  return { ok: true, win, cfg, bet, selected, selectedOdds, how, maxStake, expectedOdds: exp || null, oddsOk };
+}
 
-  // 1.5) читаем МАКСИМУМ ставки конторы (для калькулятора вилки). Betano: клик MAX впишет макс
-  //      в поле — поэтому читаем ДО ввода нашей суммы (наша сумма ниже перезапишет поле).
-  let maxStake = null;
-  if (cfg.outcomeSel) { maxStake = await readBookmakerMax(win, id); }
-
-  // 2) ввод суммы (React value-tracker) + поиск кнопки постановки.
+// Шаг 2: вписать сумму (React value-tracker) + найти кнопку постановки. Исход уже выбран.
+async function fillStakeOnly(win, cfg, stake) {
   const js = `(async () => {
     const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms));
     const inp = document.querySelector(${JSON.stringify(cfg.stake)});
@@ -467,34 +423,132 @@ async function placeBet(id, stake, live = false) {
     inp.dispatchEvent(new Event("change", { bubbles: true }));
     await SLEEP(800);
     const words = ${JSON.stringify(cfg.placeWords)};
-    const pbtn = [...document.querySelectorAll("button")].find((b) => {
-      const t = (b.innerText || "").toUpperCase(); return words.every((w) => t.includes(w.toUpperCase()));
-    });
+    const pbtn = [...document.querySelectorAll("button")].find((b) => { const t = (b.innerText || "").toUpperCase(); return words.every((w) => t.includes(w.toUpperCase())); });
     return { ok: true, stakeValue: inp.value, placeBtnText: pbtn ? (pbtn.innerText || "").replace(/\\s+/g, " ").trim() : null, hasPlaceBtn: !!pbtn };
   })()`;
+  try { return await win.webContents.executeJavaScript(js); }
+  catch (e) { return { error: e.message }; }
+}
+
+// Шаг 3: боевой клик по кнопке постановки.
+async function clickPlace(win, cfg) {
   try {
-    const r = await win.webContents.executeJavaScript(js);
-    r.selected = selected; r.selectedOdds = selectedOdds; r.how = how; r.maxStake = maxStake;
-    if (r.error) {
-      r.ok = false;
-      logger.log("WARN", "dry-run/place", id, JSON.stringify(r));
-      return r;
-    }
-    const exp = bet.expectedOdds;
-    r.expectedOdds = exp || null;
-    r.oddsOk = (exp && r.selectedOdds) ? (r.selectedOdds >= exp * (1 - ODDS_TOLERANCE)) : null;
-    // боевой клик — только если live И кэф не уехал (или сверять нечего)
-    if (live && r.hasPlaceBtn && r.oddsOk !== false) {
-      await win.webContents.executeJavaScript(`(() => {
-        const words = ${JSON.stringify(cfg.placeWords)};
-        const b = [...document.querySelectorAll("button")].find((x) => { const t=(x.innerText||"").toUpperCase(); return words.every((w)=>t.includes(w.toUpperCase())); });
-        if (b) b.click(); return !!b;
-      })()`);
-      r.placed = true;
-    } else { r.placed = false; }
-    logger.log("INFO", live ? "PLACE" : "dry-run", id, JSON.stringify(r));
+    return await win.webContents.executeJavaScript(`(() => {
+      const words = ${JSON.stringify(cfg.placeWords)};
+      const b = [...document.querySelectorAll("button")].find((x) => { const t = (x.innerText || "").toUpperCase(); return words.every((w) => t.includes(w.toUpperCase())); });
+      if (b) b.click(); return !!b;
+    })()`);
+  } catch { return false; }
+}
+
+// Простановка ОДНОГО плеча (IPC dry-run/place): выбор → сумма → (live) клик.
+async function placeBet(id, stake, live = false) {
+  const s = await selectLegOutcome(id);
+  if (!s.ok) {
+    const r = { ok: false, error: s.error, selected: s.selected, selectedOdds: s.selectedOdds, how: s.how };
+    logger.log("WARN", "dry-run/place", id, JSON.stringify(r));
     return r;
-  } catch (e) { return { ok: false, error: e.message, selected, selectedOdds, how }; }
+  }
+  const f = await fillStakeOnly(s.win, s.cfg, stake);
+  const r = { ...f, selected: s.selected, selectedOdds: s.selectedOdds, how: s.how, maxStake: s.maxStake, expectedOdds: s.expectedOdds, oddsOk: s.oddsOk };
+  if (r.error) { r.ok = false; logger.log("WARN", "dry-run/place", id, JSON.stringify(r)); return r; }
+  r.placed = false;
+  if (live && r.hasPlaceBtn && s.oddsOk !== false) { await clickPlace(s.win, s.cfg); r.placed = true; }
+  logger.log("INFO", live ? "PLACE" : "dry-run", id, JSON.stringify(r));
+  return r;
+}
+
+// === Оркестратор «Запуск бота»: вилка → оба плеча → выбор → калькулятор → суммы → (live) клик ===
+
+// Открыть событие плеча по surebet-nav (резолв → окно конторы → дойти до события). Возвращает,
+// когда окно конторы на событии (есть числовой id). Используется кликом по плечу и оркестратором.
+async function routeLeg(navUrl) {
+  const nav = resolveSurebetNav(navUrl, settings.bookers || []);
+  if (!nav || !nav.booker) return { ok: false, error: "плечо не сопоставлено с конторой" };
+  pendingBet.set(nav.booker.id, { outcomeId: nav.outcomeId, expectedOdds: nav.expectedOdds, desc: nav.desc, descFull: nav.descFull });
+  const initial = nav.targetUrl || nav.booker.url;
+  logger.log("INFO", "  → контора:", nav.booker.id, "| исход:", nav.desc, "| кэф:", nav.expectedOdds, "| открываю:", initial);
+  try { logger.log("INFO", "  [диаг] descFull:", nav.descFull || "—", "| markers:", JSON.stringify(nav.markers || {}).slice(0, 400)); } catch { /* ignore */ }
+  await openBookerProfile(nav.booker, initial).catch((e) => logger.log("WARN", "route booker:", e));
+  if (!isEventUrl(initial)) {
+    const eventUrl = await resolveEventViaNav(navUrl, nav.booker).catch(() => null);
+    const w = bookerWins.get(nav.booker.id);
+    if (eventUrl && eventUrl !== initial && w && !w.isDestroyed()) { logger.log("INFO", "  глубокая ссылка события:", eventUrl); await w.loadURL(eventUrl).catch(() => {}); }
+  } else { logger.log("INFO", "  глубокая ссылка уже есть — surebet-редирект пропускаю"); }
+  const w = bookerWins.get(nav.booker.id);
+  for (let i = 0; i < 15; i++) {
+    await sleep(1000);
+    if (!w || w.isDestroyed()) return { ok: false, booker: nav.booker, error: "окно закрылось" };
+    let u = ""; try { u = w.webContents.getURL(); } catch { /* ignore */ }
+    if (isEventUrl(u)) return { ok: true, booker: nav.booker, win: w };
+  }
+  return { ok: false, booker: nav.booker, error: "событие не открылось за 15с (Asian/compact не поддерживаем)" };
+}
+
+// Найти в сканере вилку с парой Betano + Pinnacle (Delayed). Возвращает две nav-ссылки плеч.
+async function pickVilka() {
+  if (!surebetWin || surebetWin.isDestroyed()) return { ok: false, error: "окно surebet закрыто" };
+  let rows = [];
+  try {
+    rows = await surebetWin.webContents.executeJavaScript(`(() => {
+      const out = [];
+      document.querySelectorAll('tbody.surebet_record').forEach((tb) => {
+        const hrefs = [...new Set([...tb.querySelectorAll('a[href*="/nav/surebet/prong/"]')].map((a) => a.href))];
+        if (hrefs.length >= 2) out.push(hrefs);
+      });
+      return out;
+    })()`);
+  } catch (e) { return { ok: false, error: "чтение сканера: " + e.message }; }
+  let seen = 0;
+  for (const hrefs of rows) {
+    let betano = null, pinnacle = null;
+    for (const href of hrefs) {
+      const nav = resolveSurebetNav(href, settings.bookers || []);
+      if (!nav || !nav.booker) continue;
+      if (nav.booker.id === "betano" && !betano) betano = href;
+      else if (nav.booker.id === "pinnacle" && nav.bk !== "ps3838" && !pinnacle) pinnacle = href; // только Delayed
+    }
+    if (betano && pinnacle) { seen++; return { ok: true, betanoNav: betano, pinnacleNav: pinnacle }; }
+  }
+  return { ok: false, error: "в сканере нет вилки с парой Betano + Pinnacle (Delayed). Записей: " + rows.length };
+}
+
+let botBusy = false;
+async function runBot(live = false) {
+  if (botBusy) return { ok: false, error: "бот уже работает — подожди" };
+  botBusy = true;
+  try {
+    if (!fxRate || !(fxRate.rate > 0)) await refreshFx();
+    const v = await pickVilka();
+    if (!v.ok) return v;
+    logger.log("INFO", "[бот] нашёл вилку Betano + Pinnacle(Delayed), открываю плечи");
+    const rB = await routeLeg(v.betanoNav);
+    if (!rB.ok) return { ok: false, error: "Betano: " + rB.error };
+    const rP = await routeLeg(v.pinnacleNav);
+    if (!rP.ok) return { ok: false, error: "Pinnacle: " + rP.error };
+    const sB = await selectLegOutcome("betano");
+    if (!sB.ok) return { ok: false, error: "Betano исход: " + sB.error };
+    const sP = await selectLegOutcome("pinnacle");
+    if (!sP.ok) return { ok: false, error: "Pinnacle исход: " + sP.error };
+    const limit = Number(settings.vilkaLimitEur) > 0 ? Number(settings.vilkaLimitEur) : Infinity;
+    const calc = vilkaStakes({ oddsEur: sB.selectedOdds, oddsUsd: sP.selectedOdds, usdToEur: fxRate.rate, maxEur: sB.maxStake || Infinity, maxUsd: sP.maxStake || Infinity, limitEur: limit });
+    if (!calc.ok) return { ok: false, error: "расчёт: " + (calc.error || "плюс не гарантирован"), calc };
+    const fB = await fillStakeOnly(sB.win, sB.cfg, calc.eur);
+    const fP = await fillStakeOnly(sP.win, sP.cfg, calc.usd);
+    let placed = false;
+    if (live && fB.hasPlaceBtn && fP.hasPlaceBtn && sB.oddsOk !== false && sP.oddsOk !== false) {
+      await clickPlace(sB.win, sB.cfg); await clickPlace(sP.win, sP.cfg); placed = true;
+    }
+    const summary = {
+      ok: true, placed, rate: fxRate.rate,
+      profitPct: calc.profitPct, profitEur: calc.profitEur, totalEur: calc.totalEur,
+      betano: { selected: sB.selected, odds: sB.selectedOdds, oddsOk: sB.oddsOk, max: sB.maxStake, stake: calc.eur, stakeValue: fB.stakeValue, placeBtn: fB.placeBtnText },
+      pinnacle: { selected: sP.selected, odds: sP.selectedOdds, oddsOk: sP.oddsOk, max: sP.maxStake, stake: calc.usd, stakeValue: fP.stakeValue, placeBtn: fP.placeBtnText },
+    };
+    logger.log("INFO", live ? "[БОТ PLACE]" : "[бот dry-run]", JSON.stringify(summary));
+    return summary;
+  } catch (e) { logger.log("ERROR", "runBot:", e); return { ok: false, error: e.message }; }
+  finally { botBusy = false; }
 }
 
 function findBooker(id) { return (settings.bookers || []).find((b) => b.id === id); }
@@ -597,6 +651,7 @@ function maskedSettings() {
     pollMs: settings.pollMs,
     keyword: settings.keyword,
     liveMode: !!settings.liveMode,
+    vilkaLimitEur: settings.vilkaLimitEur || 0,
     hasToken: !!settings.tgToken,
   };
 }
@@ -793,6 +848,7 @@ ipcMain.handle("save-settings", (_e, patch) => {
   if (patch.pollMs) clean.pollMs = Math.max(3000, Number(patch.pollMs) || 8000);
   if (patch.keyword) clean.keyword = String(patch.keyword).trim().toLowerCase();
   if (typeof patch.liveMode === "boolean") clean.liveMode = patch.liveMode;
+  if (patch.vilkaLimitEur !== undefined) clean.vilkaLimitEur = Math.max(0, Number(patch.vilkaLimitEur) || 0);
   settings = settingsStore.save(clean);
   startupSent = false;
   startLoop();
@@ -858,6 +914,12 @@ ipcMain.handle("dry-run-place", async (_e, id, stake) => await placeBet(id, stak
 ipcMain.handle("place-bet", async (_e, id, stake) => {
   if (!settings.liveMode) return { ok: false, error: "боевой режим ВЫКЛ — включи тумблер, чтобы ставить реально" };
   return await placeBet(id, stake, true);
+});
+// Полный авто-цикл: бот сам берёт вилку (Betano + Pinnacle Delayed) и проходит оба плеча.
+// live=true разрешён только при включённом тумблере БОЕВОЙ; иначе всегда dry-run (без ставки).
+ipcMain.handle("run-bot", async (_e, live) => {
+  const wantLive = !!live && !!settings.liveMode;
+  return await runBot(wantLive);
 });
 
 // ── запуск ────────────────────────────────────────────────────────────────────
