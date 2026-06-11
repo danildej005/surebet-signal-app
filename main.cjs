@@ -13,6 +13,8 @@ const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
 const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
+const { startSocksBridge } = require("./lib/proxyBridge.cjs");
+const fx = require("./lib/fx.cjs");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -24,8 +26,6 @@ async function refreshFx() {
     if (panelWin && !panelWin.isDestroyed()) panelWin.webContents.send("fx", fxRate);
   } catch (e) { logger.log("WARN", "курс:", e.message); }
 }
-const { startSocksBridge } = require("./lib/proxyBridge.cjs");
-const fx = require("./lib/fx.cjs");
 
 const SUREBET_URL = "https://su.surebet.com/surebets";
 const PARTITION = "persist:surebet"; // постоянная сессия → логин сохраняется
