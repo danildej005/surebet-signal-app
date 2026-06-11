@@ -12,7 +12,9 @@ const { formatSignal } = require("./lib/format.cjs");
 const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
-const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl } = require("./lib/bookers.cjs");
+const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject } = require("./lib/bookers.cjs");
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 
 const SUREBET_URL = "https://su.surebet.com/surebets";
@@ -87,11 +89,17 @@ function createSurebetWindow() {
         // (Betano = только домен; Pinnacle иногда даёт общий раздел /en/compact/sports).
         // Ссылка считается «событием» только если в пути есть числовой id события (см. isEventUrl).
         if (!isEventUrl(initial)) {
-          resolveEventViaNav(url, nav.booker).then((eventUrl) => {
+          const subject = extractSubject(nav.descFull) || extractSubject(nav.desc);
+          resolveEventViaNav(url, nav.booker).then(async (eventUrl) => {
+            const w = bookerWins.get(nav.booker.id);
             if (eventUrl && eventUrl !== initial) {
               logger.log("INFO", "  глубокая ссылка события:", eventUrl);
-              const w = bookerWins.get(nav.booker.id);
               if (w && !w.isDestroyed()) w.loadURL(eventUrl);
+            }
+            // Если редирект довёл только до раздела (не событие) — ищем матч по имени игрока.
+            const reached = (eventUrl && eventUrl !== initial) ? eventUrl : initial;
+            if (!isEventUrl(reached) && w && !w.isDestroyed() && subject) {
+              await navigateToEventByName(nav.booker, w, subject);
             }
           }).catch((e) => logger.log("WARN", "resolveEventViaNav:", e));
         } else {
@@ -275,6 +283,48 @@ function resolveEventViaNav(navUrl, booker, timeoutMs = 15000) {
     wc.loadURL(navUrl).catch(() => {});
     setTimeout(finish, timeoutMs);           // жёсткий таймаут
   });
+}
+
+// Поиск МАТЧА по имени игрока/команды, когда прямой ссылки на событие нет (Pinnacle отдаёт
+// только раздел). Вводим имя в поиск конторы → кликаем строку матча с этим именем → ждём,
+// пока URL станет событием (есть числовой id). Логируем каждый шаг (self-диагностика).
+const SEARCH_SEL = { pinnacle: ["#oddsPageSearch", "#search-input", "input[placeholder*='Search' i]"] };
+async function navigateToEventByName(booker, win, subject) {
+  try {
+    const sels = SEARCH_SEL[booker.id];
+    if (!sels || !subject) return;
+    const surname = subject.split(/\s+/).filter(Boolean).pop() || subject;
+    await sleep(1500); // дать списку прогрузиться
+    const js = `(async () => {
+      const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms));
+      const inp = ${JSON.stringify(sels)}.map((s) => document.querySelector(s)).find(Boolean);
+      if (inp) {
+        inp.focus();
+        const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+        set.call(inp, ${JSON.stringify(subject)});
+        inp.dispatchEvent(new Event("input", { bubbles: true }));
+        inp.dispatchEvent(new Event("keyup", { bubbles: true }));
+      }
+      await SLEEP(1800);
+      const NAME = ${JSON.stringify(surname)}.toLowerCase();
+      const els = [...document.querySelectorAll("a, [class*=event], [class*=game], [class*=match], [class*=row], [onclick]")]
+        .filter((e) => e.offsetParent !== null && (e.innerText || "").toLowerCase().includes(NAME));
+      // самый «глубокий» (мелкий) кликабельный элемент с именем — обычно строка матча
+      els.sort((a, b) => (a.innerText || "").length - (b.innerText || "").length);
+      const hit = els[0];
+      if (hit) { hit.click(); return { ok: true, hadInput: !!inp, text: (hit.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 80), found: els.length }; }
+      return { ok: false, hadInput: !!inp, found: 0 };
+    })()`;
+    const r = await win.webContents.executeJavaScript(js).catch((e) => ({ error: e.message }));
+    logger.log("INFO", "  [поиск матча]", booker.id, "subject:", subject, "→", JSON.stringify(r));
+    for (let i = 0; i < 8; i++) {
+      await sleep(1000);
+      if (win.isDestroyed()) return;
+      const u = win.webContents.getURL();
+      if (isEventUrl(u)) { logger.log("INFO", "  событие найдено по имени:", u); return; }
+    }
+    logger.log("WARN", "  событие по имени не открылось (subject:", subject + ")");
+  } catch (e) { logger.log("WARN", "navigateToEventByName:", e); }
 }
 
 // Привести профиль к новому виду: прокси-объект {protocol,host,port,user,pass} + login.

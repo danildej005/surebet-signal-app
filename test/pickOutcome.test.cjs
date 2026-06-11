@@ -3,7 +3,7 @@
 // Pinnacle: ATP Stuttgart, Shimabukuro–Kyrgios. Betano: тот же матч.
 const test = require("node:test");
 const assert = require("node:assert");
-const { pickOutcome, classifyDesc, orderPlayers, isEventUrl } = require("../lib/bookers.cjs");
+const { pickOutcome, classifyDesc, orderPlayers, isEventUrl, extractSubject } = require("../lib/bookers.cjs");
 
 const SLUG_T = "https://www.betano.pt/odds/sho-shimabukuro-nick-kyrgios/87161959/"; // player1=Shimabukuro
 const SLUG_NBA = "https://www.betano.pt/odds/new-york-knicks-san-antonio-spurs/86655013/"; // player1=Knicks
@@ -153,6 +153,13 @@ test("Betano фора Ф1(+1.5): сторона подтверждена име�
   const r = pickOutcome({ desc: "Ф1(+1.5)", expectedOdds: 1.72, buttons: BET, eventUrl: SLUG_T });
   assert.strictEqual(r.text, "Sho Shimabukuro +1.5 1.72");
   assert.strictEqual(r.how, "name");
+});
+
+// ── extractSubject: имя игрока/команды из расширенного описания ───────────────
+test("extractSubject: имя игрока из descFull", () => {
+  assert.strictEqual(extractSubject("Sho Shimabukuro победит с форой +1.5 (азиатский гандикап) - сеты"), "Sho Shimabukuro");
+  assert.strictEqual(extractSubject("San Antonio Spurs тотал больше 220.5"), "San Antonio Spurs");
+  assert.strictEqual(extractSubject("New York Knicks победит"), "New York Knicks");
 });
 
 // ── isEventUrl: ссылка на КОНКРЕТНОЕ событие (есть числовой id), а не раздел ───
