@@ -12,7 +12,7 @@ const { formatSignal } = require("./lib/format.cjs");
 const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
-const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject } = require("./lib/bookers.cjs");
+const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
@@ -80,7 +80,7 @@ function createSurebetWindow() {
       // 1) surebet-редирект /nav/.../prong/N/ → контора и событие по индексу плеча
       const nav = resolveSurebetNav(url, settings.bookers || []);
       if (nav && nav.booker) {
-        pendingBet.set(nav.booker.id, { outcomeId: nav.outcomeId, expectedOdds: nav.expectedOdds, desc: nav.desc });
+        pendingBet.set(nav.booker.id, { outcomeId: nav.outcomeId, expectedOdds: nav.expectedOdds, desc: nav.desc, descFull: nav.descFull });
         const initial = nav.targetUrl || nav.booker.url;
         logger.log("INFO", "  → контора:", nav.booker.id, "| исход:", nav.desc, "| кэф:", nav.expectedOdds, "| открываю:", initial);
         try { logger.log("INFO", "  [диаг] descFull:", nav.descFull || "—", "| markers:", JSON.stringify(nav.markers || {}).slice(0, 500)); } catch { /* ignore */ }
@@ -374,6 +374,25 @@ async function placeBet(id, stake, live = false) {
   //    кликнуть по ИНДЕКСУ (id есть только у Pinnacle; у Betano исходы без id).
   if (cfg.outcomeSel) {
     const sel = cfg.outcomeSel;
+    // Pinnacle: сеты и геймы — в РАЗНЫХ вкладках. Берём единицу из descFull и кликаем нужную
+    // вкладку (+ «Show All»), чтобы нужные исходы прогрузились перед чтением.
+    if (id === "pinnacle") {
+      const unit = marketUnit(bet.descFull);
+      if (unit) {
+        try {
+          const clicked = await win.webContents.executeJavaScript(`(() => {
+            const tabId = ${JSON.stringify(unit === "set" ? "set-markets" : "game-markets")};
+            const txt = ${JSON.stringify(unit === "set" ? "SET MARKETS" : "GAME MARKETS")};
+            const tab = document.getElementById(tabId) || [...document.querySelectorAll("button,[role=button]")].find((b) => (b.innerText || "").trim().toUpperCase() === txt);
+            if (tab) tab.click();
+            const all = document.querySelector(".btn-toggle-all"); if (all) all.click();
+            return !!tab;
+          })()`);
+          logger.log("INFO", "  [рынок] Pinnacle вкладка:", unit, "клик:", clicked);
+          await sleep(1300);
+        } catch (e) { logger.log("WARN", "tab click:", e); }
+      }
+    }
     let buttons = [];
     try {
       buttons = await win.webContents.executeJavaScript(`(() => {
