@@ -53,7 +53,7 @@ function fmtLeg(name, l) {
   const ok = l.oddsOk === false ? " ⚠️УЕХАЛ" : (l.oddsOk ? " ✓" : "");
   return name + ": " + (l.selected || "?") + " · кэф " + (l.odds ?? "?") + ok +
     " · ставка " + (l.stake ?? "?") + " (вписано " + (l.stakeValue ?? "?") + ")" +
-    " · макс " + (l.max ?? "?") + " · кнопка: " + (l.placeBtn || "—");
+    " · макс " + (l.max ?? "?") + " · баланс " + (l.balance ?? "?") + " · кнопка: " + (l.placeBtn || "—");
 }
 function fmtBot(r) {
   if (!r) return "—";
@@ -72,8 +72,16 @@ $("runBot").onclick = async () => {
       : "бот снят с ожидания";
   } catch (e) { $("botResult").textContent = "⚠️ " + e.message; }
 };
-// результат цикла приходит push-ом, когда бот поймал вилку и отработал
-if (window.api.onBot) window.api.onBot((res) => { $("botResult").textContent = fmtBot(res); setBotBtn(false); });
+// результат цикла приходит push-ом: пропуск (ищем дальше, остаёмся в ожидании) или успех (стоп)
+if (window.api.onBot) window.api.onBot((res) => {
+  if (res && res.skipped) {
+    $("botResult").textContent = "⏭ пропустил «" + (res.pair || "?") + "» (" + (res.reason || "не умею") + ") — ищу дальше…";
+    setBotBtn(true); // остаёмся взведёнными
+  } else {
+    $("botResult").textContent = fmtBot(res);
+    setBotBtn(false); // успех → стоп
+  }
+});
 
 // ── конторы (антидетект-профили) ──────────────────────────────────────────────
 let bookersCache = [];
