@@ -21,4 +21,5 @@ contextBridge.exposeInMainWorld("api", {
   runBot: (live) => ipcRenderer.invoke("run-bot", live),
   onStatus: (cb) => ipcRenderer.on("status", (_e, s) => cb(s)),
   onFx: (cb) => ipcRenderer.on("fx", (_e, r) => cb(r)),
+  onBot: (cb) => ipcRenderer.on("bot", (_e, r) => cb(r)),
 });

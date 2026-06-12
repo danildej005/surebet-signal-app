@@ -15,15 +15,17 @@ function renderStatus(s) {
   $("lastError").textContent = s.lastError ? "⚠️ " + s.lastError : "";
   if (s.settings && typeof s.settings.liveMode === "boolean" && document.activeElement !== $("liveMode")) {
     $("liveMode").checked = s.settings.liveMode;
-    updateBotBtn();
   }
+  if (typeof s.botArmed === "boolean" && s.botArmed !== botArmedUi) setBotBtn(s.botArmed);
   if (s.settings && s.settings.vilkaLimitEur != null && document.activeElement !== $("vilkaLimit") && !$("vilkaLimit").value) {
     if (s.settings.vilkaLimitEur > 0) $("vilkaLimit").value = s.settings.vilkaLimitEur;
   }
 }
-function updateBotBtn() {
+let botArmedUi = false;
+function setBotBtn(armed) {
+  botArmedUi = armed;
   const live = $("liveMode").checked;
-  $("runBot").textContent = live ? "▶ Запуск бота ⚡БОЕВОЙ" : "▶ Запуск бота (dry-run)";
+  $("runBot").textContent = armed ? "⏹ Стоп (жду вилку)" : (live ? "▶ Запуск бота ⚡БОЕВОЙ" : "▶ Запуск бота (dry-run)");
 }
 
 async function refresh() { renderStatus(await window.api.getStatus()); }
@@ -32,7 +34,7 @@ window.api.onStatus(renderStatus);
 
 $("openSurebet").onclick = () => window.api.openSurebet();
 $("openLogs").onclick = () => window.api.openLogs();
-$("liveMode").onchange = () => { window.api.saveSettings({ liveMode: $("liveMode").checked }); updateBotBtn(); };
+$("liveMode").onchange = () => { window.api.saveSettings({ liveMode: $("liveMode").checked }); setBotBtn(botArmedUi); };
 
 function showFx(r) {
   if (!r || !$("fxRate")) return;
@@ -62,12 +64,16 @@ function fmtBot(r) {
 }
 $("runBot").onclick = async () => {
   const live = $("liveMode").checked;
-  $("botResult").textContent = "бот работает: ищу вилку, открываю плечи, считаю…";
-  $("runBot").disabled = true;
-  try { $("botResult").textContent = fmtBot(await window.api.runBot(live)); }
-  catch (e) { $("botResult").textContent = "⚠️ " + e.message; }
-  $("runBot").disabled = false;
+  try {
+    const r = await window.api.runBot(live);
+    setBotBtn(!!(r && r.armed));
+    $("botResult").textContent = (r && r.armed)
+      ? "⏳ жду вилку Betano + Pinnacle(Delayed)… как поймаю — проставлю и остановлюсь"
+      : "бот снят с ожидания";
+  } catch (e) { $("botResult").textContent = "⚠️ " + e.message; }
 };
+// результат цикла приходит push-ом, когда бот поймал вилку и отработал
+if (window.api.onBot) window.api.onBot((res) => { $("botResult").textContent = fmtBot(res); setBotBtn(false); });
 
 // ── конторы (антидетект-профили) ──────────────────────────────────────────────
 let bookersCache = [];
