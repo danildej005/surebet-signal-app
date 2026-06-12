@@ -516,23 +516,22 @@ async function routeLeg(navUrl) {
   return { ok: false, booker: nav.booker, error: "событие не открылось за 15с (Asian/compact не поддерживаем)" };
 }
 
-// Найти в сканере вилку Betano + Pinnacle (Delayed) ПО ИМЕНАМ контор (как Telegram-сигналы) и
-// КЛИКНУТЬ оба плеча — как рукой. surebet сам построит nav-ссылки (с json_body), их ловит
-// setWindowOpenHandler → routeLeg открывает события. Ничего из href НЕ парсим (там нет json_body).
-async function findAndClickVilka(skip = []) {
+// Найти в сканере вилку Betano + Pinnacle (Delayed) ПО ИМЕНАМ контор. НЕ кликает — возвращает
+// токен вилки и индексы плеч (prong), чтобы кликать их ПО ОЧЕРЕДИ (дохождение события через
+// surebet тогда идёт по одному, без параллельного конфликта). skip — токены уже пробованных.
+async function findVilka(skip = []) {
   if (!surebetWin || surebetWin.isDestroyed()) return { ok: false, error: "окно surebet закрыто" };
-  let r;
   try {
-    r = await surebetWin.webContents.executeJavaScript(`(() => {
+    return await surebetWin.webContents.executeJavaScript(`(() => {
       const SKIP = ${JSON.stringify(skip)};
       for (const tb of document.querySelectorAll('tbody.surebet_record')) {
         const books = [...tb.querySelectorAll('[data-testid="surebet-leg-bookmaker"]')].map((e) => (e.innerText || '').trim());
-        const byProng = {}; let token = ''; // nav-ссылка по индексу плеча + токен вилки (общий для плеч)
+        const byProng = {}; let token = '';
         tb.querySelectorAll('a[href*="/nav/surebet/prong/"]').forEach((a) => {
           const m = (a.getAttribute('href') || a.href || '').match(/\\/prong\\/(\\d+)\\/([^/]+)/);
           if (m) { if (byProng[m[1]] === undefined) byProng[m[1]] = a; token = m[2]; }
         });
-        if (token && SKIP.indexOf(token) >= 0) continue; // уже пробовали эту вилку — пропускаем
+        if (token && SKIP.indexOf(token) >= 0) continue;
         let bi = -1, pi = -1;
         books.forEach((nm, i) => {
           const low = nm.toLowerCase();
@@ -540,19 +539,37 @@ async function findAndClickVilka(skip = []) {
           else if (/pinnacle/.test(low) && /delayed/.test(low) && pi < 0) pi = i;
         });
         if (bi >= 0 && pi >= 0 && byProng[bi] && byProng[pi]) {
-          byProng[bi].click(); byProng[pi].click();
-          return { ok: true, token, betano: books[bi], pinnacle: books[pi] };
+          return { ok: true, token, betano: { name: books[bi], prong: bi }, pinnacle: { name: books[pi], prong: pi } };
         }
       }
       return { ok: false };
     })()`);
   } catch (e) { return { ok: false, error: "чтение сканера: " + e.message }; }
-  if (r && r.ok) logger.log("INFO", "[бот] вилка найдена, кликнул плечи:", r.betano, "+", r.pinnacle, "| token:", r.token);
-  return r || { ok: false };
 }
 
+// Кликнуть ОДНО плечо вилки (по токену + индексу пронга). surebet строит nav-ссылку →
+// setWindowOpenHandler ловит → routeLeg открывает событие.
+async function clickVilkaLeg(token, prong) {
+  if (!surebetWin || surebetWin.isDestroyed()) return false;
+  try {
+    return await surebetWin.webContents.executeJavaScript(`(() => {
+      for (const tb of document.querySelectorAll('tbody.surebet_record')) {
+        const byProng = {}; let token = '';
+        tb.querySelectorAll('a[href*="/nav/surebet/prong/"]').forEach((a) => {
+          const m = (a.getAttribute('href') || a.href || '').match(/\\/prong\\/(\\d+)\\/([^/]+)/);
+          if (m) { if (byProng[m[1]] === undefined) byProng[m[1]] = a; token = m[2]; }
+        });
+        if (token === ${JSON.stringify(token)} && byProng[${Number(prong)}]) { byProng[${Number(prong)}].click(); return true; }
+      }
+      return false;
+    })()`);
+  } catch { return false; }
+}
+
+function bookerUrl(id) { const w = bookerWins.get(id); try { return w && !w.isDestroyed() ? w.webContents.getURL() : "—"; } catch { return "—"; } }
+
 // Дождаться, что окно конторы открылось на КОНКРЕТНОМ событии (числовой id в URL).
-async function waitBookerEvent(id, tries = 20) {
+async function waitBookerEvent(id, tries = 30) {
   for (let i = 0; i < tries; i++) {
     await sleep(1000);
     const w = bookerWins.get(id);
@@ -572,15 +589,20 @@ const triedVilkas = new Set(); // токены вилок, которые бот
 async function runOneBotCycle(live = false) {
   botBusy = true;
   try {
-    const clicked = await findAndClickVilka([...triedVilkas]);
-    if (!clicked.ok) return null; // нет НОВОЙ подходящей вилки — ждём следующий тик
-    const tok = clicked.token || "";
-    const pair = (clicked.betano || "Betano") + " + " + (clicked.pinnacle || "Pinnacle");
+    const v = await findVilka([...triedVilkas]);
+    if (!v.ok) return null; // нет НОВОЙ подходящей вилки — ждём следующий тик
+    const tok = v.token || "";
+    const pair = (v.betano.name || "Betano") + " + " + (v.pinnacle.name || "Pinnacle");
     // на любом провале — заносим вилку в «пробованные» и просим бота искать дальше (skipped)
     const skip = (reason) => { if (tok) triedVilkas.add(tok); logger.log("INFO", "[бот] пропускаю вилку:", reason); return { skipped: true, reason, pair }; };
+    logger.log("INFO", "[бот] вилка:", pair, "| token:", tok, "— открываю плечи по очереди");
     if (!fxRate || !(fxRate.rate > 0)) await refreshFx();
-    if (!(await waitBookerEvent("betano"))) return skip("Betano: событие не открылось");
-    if (!(await waitBookerEvent("pinnacle"))) return skip("Pinnacle: событие не открылось");
+    // ПОСЛЕДОВАТЕЛЬНО: сначала Betano (клик → ждём событие), потом Pinnacle — чтобы дохождение
+    // события через surebet не шло параллельно (это и валило Pinnacle).
+    if (!(await clickVilkaLeg(tok, v.betano.prong))) return skip("Betano: плечо не кликнулось");
+    if (!(await waitBookerEvent("betano"))) return skip("Betano: событие не открылось (застряло: " + bookerUrl("betano") + ")");
+    if (!(await clickVilkaLeg(tok, v.pinnacle.prong))) return skip("Pinnacle: плечо не кликнулось");
+    if (!(await waitBookerEvent("pinnacle"))) return skip("Pinnacle: событие не открылось (застряло: " + bookerUrl("pinnacle") + ")");
     const sB = await selectLegOutcome("betano");
     if (!sB.ok) return skip("Betano: " + sB.error);
     const sP = await selectLegOutcome("pinnacle");
@@ -845,7 +867,8 @@ async function tick() {
     const now = Date.now();
     const idle = !surebetWin.isFocused();
     const periodic = now - lastReloadAt > 4 * 60 * 1000;
-    if (idle && (r.paused || periodic) && now - lastReloadAt > 30000) {
+    // пока бот занят — НЕ перезагружаем surebet: дохождение события идёт через эту же сессию
+    if (!botBusy && idle && (r.paused || periodic) && now - lastReloadAt > 30000) {
       lastReloadAt = now;
       logger.log("INFO", "перезагрузка surebet:", r.paused ? "была пауза" : "профилактика");
       try { surebetWin.webContents.reload(); } catch (e) { logger.log("WARN", "reload:", e); }
