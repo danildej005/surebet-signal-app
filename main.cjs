@@ -403,18 +403,27 @@ async function selectLegOutcome(id) {
   if (cfg.outcomeSel) {
     const sel = cfg.outcomeSel;
     const unit = marketUnit(bet.descFull); // сеты/геймы — для вкладки Pinnacle и маппинга фора→счёт
-    if (id === "pinnacle" && unit) { // сеты и геймы — в РАЗНЫХ вкладках: открываем нужную (+ Show All)
+    // Дождаться, пока контора ПРОРИСУЕТ кнопки исходов (Pinnacle standard SPA рендерит ~10с) —
+    // иначе читаем пустую страницу и получаем «кнопок:0».
+    for (let i = 0; i < 15; i++) {
+      let n = 0; try { n = await win.webContents.executeJavaScript(`document.querySelectorAll(${JSON.stringify(sel)}).length`); } catch { /* ignore */ }
+      if (n > 0) break;
+      await sleep(1000);
+    }
+    if (id === "pinnacle") { // вкладка по единице (сеты/геймы, если есть) + ВСЕГДА «Show All» (раскрыть альт-линии)
       try {
         await win.webContents.executeJavaScript(`(() => {
-          const tabId = ${JSON.stringify(unit === "set" ? "set-markets" : "game-markets")};
-          const txt = ${JSON.stringify(unit === "set" ? "SET MARKETS" : "GAME MARKETS")};
-          const tab = document.getElementById(tabId) || [...document.querySelectorAll("button,[role=button]")].find((b) => (b.innerText || "").trim().toUpperCase() === txt);
-          if (tab) tab.click();
+          const unit = ${JSON.stringify(unit || "")};
+          if (unit) {
+            const tab = document.getElementById(unit === "set" ? "set-markets" : "game-markets") ||
+              [...document.querySelectorAll("button,[role=button]")].find((b) => (b.innerText || "").trim().toUpperCase() === (unit === "set" ? "SET MARKETS" : "GAME MARKETS"));
+            if (tab) tab.click();
+          }
           const all = document.querySelector(".btn-toggle-all"); if (all) all.click();
-          return !!tab;
+          return true;
         })()`);
-        await sleep(1300);
-      } catch (e) { logger.log("WARN", "tab click:", e); }
+        await sleep(1500);
+      } catch (e) { logger.log("WARN", "pinnacle tab/showall:", e); }
     }
     let buttons = [];
     try {
