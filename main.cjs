@@ -15,7 +15,7 @@ const settingsStore = require("./lib/settings.cjs");
 const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 const fx = require("./lib/fx.cjs");
-const { parseMoney } = require("./lib/vilka.cjs");
+const { parseMoney, vilkaStakes } = require("./lib/vilka.cjs");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -370,7 +370,8 @@ const BAL_JS = (cur, excl) => `(() => {
     const t = (e.innerText || '').trim();
     if (!t || t.length > 22 || !${cur}.test(t) || !/\\d/.test(t)) return;
     let top = 99999; try { top = Math.round(e.getBoundingClientRect().top); } catch (e) {}
-    out.push({ t, top, skip: ${excl}.test(t) });
+    const range = /\\d[^\\d]*[-\\u2013][^\\d]*\\d/.test(t); // «20 € - 50 €» (виджет ставок) — не баланс
+    out.push({ t, top, skip: ${excl}.test(t) || range });
   });
   return out.slice(0, 25);
 })()`;
