@@ -434,7 +434,7 @@ async function selectLegOutcome(id) {
       })()`);
     } catch (e) { return { ok: false, win, cfg, bet, error: "не прочитал кнопки исходов: " + e.message }; }
     let eventUrl = ""; try { eventUrl = win.webContents.getURL(); } catch { /* ignore */ }
-    const choice = pickOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons, eventUrl, unit });
+    const choice = pickOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons, eventUrl, unit, subject: extractSubject(bet.descFull) });
     if (!choice) return { ok: false, win, cfg, bet, error: "не нашёл исход (линия/кэф). desc=" + (bet.desc || "—") + " кэф=" + (bet.expectedOdds || "?") + " кнопок:" + buttons.length };
     selected = choice.text; selectedOdds = choice.odds; how = choice.how;
     try {
@@ -513,8 +513,15 @@ async function routeLeg(navUrl) {
   await openBookerProfile(nav.booker, initial).catch((e) => logger.log("WARN", "route booker:", e));
   if (!isEventUrl(initial)) {
     const eventUrl = await resolveEventViaNav(navUrl, nav.booker).catch(() => null);
-    const w = bookerWins.get(nav.booker.id);
-    if (eventUrl && eventUrl !== initial && w && !w.isDestroyed()) { logger.log("INFO", "  глубокая ссылка события:", eventUrl); await w.loadURL(eventUrl).catch(() => {}); }
+    const w0 = bookerWins.get(nav.booker.id);
+    if (eventUrl && eventUrl !== initial && w0 && !w0.isDestroyed()) { logger.log("INFO", "  глубокая ссылка события:", eventUrl); await w0.loadURL(eventUrl).catch(() => {}); await sleep(2500); }
+    // Фолбэк: всё ещё не на КОНКРЕТНОМ событии (Pinnacle часто застревает на /standard/home) →
+    // ищем матч на читаемой standard-странице по имени из вилки (имя теперь англ.).
+    let cur = ""; try { cur = w0 && !w0.isDestroyed() ? w0.webContents.getURL() : ""; } catch { /* ignore */ }
+    if (!isEventUrl(cur) && w0 && !w0.isDestroyed()) {
+      const subject = extractSubject(nav.descFull) || extractSubject(nav.desc);
+      if (subject) { logger.log("INFO", "  редирект не дал событие — ищу по имени:", subject); await navigateToEventByName(nav.booker, w0, subject); }
+    }
   } else { logger.log("INFO", "  глубокая ссылка уже есть — surebet-редирект пропускаю"); }
   const w = bookerWins.get(nav.booker.id);
   for (let i = 0; i < 15; i++) {
@@ -523,7 +530,7 @@ async function routeLeg(navUrl) {
     let u = ""; try { u = w.webContents.getURL(); } catch { /* ignore */ }
     if (isEventUrl(u)) return { ok: true, booker: nav.booker, win: w };
   }
-  return { ok: false, booker: nav.booker, error: "событие не открылось за 15с (Asian/compact не поддерживаем)" };
+  return { ok: false, booker: nav.booker, error: "событие не открылось за 15с" };
 }
 
 // Найти в сканере вилку Betano + Pinnacle (Delayed) ПО ИМЕНАМ контор. НЕ кликает — возвращает
@@ -579,7 +586,8 @@ async function clickVilkaLeg(token, prong) {
 function bookerUrl(id) { const w = bookerWins.get(id); try { return w && !w.isDestroyed() ? w.webContents.getURL() : "—"; } catch { return "—"; } }
 
 // Дождаться, что окно конторы открылось на КОНКРЕТНОМ событии (числовой id в URL).
-async function waitBookerEvent(id, tries = 30) {
+// 40с: дохождение через surebet + фолбэк-поиск по имени могут занять время.
+async function waitBookerEvent(id, tries = 40) {
   for (let i = 0; i < tries; i++) {
     await sleep(1000);
     const w = bookerWins.get(id);

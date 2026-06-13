@@ -195,6 +195,35 @@ test("isEventUrl: событие = да, общий раздел/домен = н
   assert.strictEqual(isEventUrl("https://www.betano.pt/"), false);
 });
 
+test("БЕЗОПАСНОСТЬ: нужной стороны по имени нет → отказ, НЕ берём чужую (-1.5 другого игрока)", () => {
+  // desc Ф1(-1.5) = Shimabukuro -1.5, но в BET есть только «Nick Kyrgios -1.5» → null (не Kyrgios!)
+  const r = pickOutcome({ desc: "Ф1(-1.5)", expectedOdds: 1.82, buttons: BET, eventUrl: SLUG_T });
+  assert.strictEqual(r, null);
+});
+
+// ── ПРЯМОЙ коннект имени плеча (descFull→subject) с кнопкой Betano (бейсбол-кейс из лога) ──
+const NBA_HCAP = withIndex([
+  { text: "Milwaukee Brewers -1.5 2.42" },
+  { text: "Philadelphia Phillies +1.5 1.55" },
+  { text: "Philadelphia Phillies -1.5 2.60" },
+  { text: "Milwaukee Brewers +1.5 1.50" },
+  { text: "Milwaukee Brewers 1.80" }, { text: "Philadelphia Phillies 2.05" },
+]);
+const SLUG_MLB = "https://www.betano.pt/odds/milwaukee-brewers-philadelphia-phillies/87086699/";
+
+test("Ф1(−1.5) subject=Milwaukee → берёт «Milwaukee Brewers -1.5» (а НЕ Philadelphia -1.5)", () => {
+  const r = pickOutcome({ desc: "Ф1(-1.5)", subject: "Milwaukee Brewers", expectedOdds: 2.42, buttons: NBA_HCAP, eventUrl: SLUG_MLB });
+  assert.strictEqual(r.text, "Milwaukee Brewers -1.5 2.42");
+});
+test("Ф1(−1.5) subject=Milwaukee, но Milwaukee -1.5 НЕТ на странице → отказ (НЕ Philadelphia -1.5)", () => {
+  const noMil = withIndex([
+    { text: "Philadelphia Phillies -1.5 2.60" }, { text: "Milwaukee Brewers +1.5 1.50" },
+    { text: "Milwaukee Brewers 1.80" }, { text: "Philadelphia Phillies 2.05" },
+  ]);
+  const r = pickOutcome({ desc: "Ф1(-1.5)", subject: "Milwaukee Brewers", expectedOdds: 2.42, buttons: noMil, eventUrl: SLUG_MLB });
+  assert.strictEqual(r, null);
+});
+
 test("Pinnacle фора (имени на кнопке нет) — остаётся выбор по кэфу", () => {
   // у Pinnacle кнопки «+1.5 1.543» без имени → имя не применяется, работает кэф
   const r = pickOutcome({ desc: "Ф1(+1.5)", expectedOdds: 1.543, buttons: PINN, eventUrl: "https://www.pinnacle888.com/en/standard/tennis/x/sho-shimabukuro-vs-nick-kyrgios/1631805342" });
