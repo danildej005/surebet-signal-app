@@ -91,6 +91,22 @@ Pinnacle оставлен `min(max, balP)` — там баланс из шапк
 **Открытые риски (помнить):** `verifyPlaced` — эвристика («кнопка постановки исчезла»), первые боевые — под
 присмотром; placed-ставки Betano («CASH OUT») захламляют окно (из-за них и был баг капа — теперь обходим).
 
+### ЗАДАЧА: «доработай юзерагент» (если владелец так скажет — это про ЭТО)
+**Сейчас:** UA берётся из фикс-пула `UA_PRESETS` (`lib/bookers.cjs:~7`) — 3 строки Chrome/Win64, версии 129/130/131,
+вид `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36`.
+Генерация: `randomFingerprint()`/`randomUA(current)` (`lib/bookers.cjs`), кнопка «🎲 новый UA» (IPC `randomize-ua`
+в `main.cjs`, рендер в `renderer/app.js` `uaRow`). Применение фингерпринта: `buildFingerprintScript(fp)`
+(`lib/bookers.cjs:~68`) + `Network.setUserAgentOverride({userAgent, acceptLanguage, platform})` в `openBookerProfile`
+(`main.cjs:~212`, CDP). **Client Hints НЕ подменяются** (нет `userAgentMetadata`).
+**Жалоба владельца:** «меняется только Chrome/130 — это мало».
+**Суть (объяснено владельцу):** в реальном UA Chrome/Win меняется ТОЛЬКО версия Chrome (остальное у всех одинаково),
+а версию нельзя гнать далеко от реального движка (Electron 33 = Chromium ~130), иначе `navigator.userAgentData`
+(Client Hints) рапортует 130 → рассинхрон с UA → палево. **Правильная доработка (вариант B):** генератор UA
+(диапазон версий, опц. Edge `Edg/…`/Opera `OPR/…`) + СИНХРОННАЯ подмена Client Hints (`userAgentMetadata`: brands,
+fullVersionList, platform) в `setUserAgentOverride` И в `buildFingerprintScript` (`navigator.userAgentData`), чтобы
+UA == Client Hints == движок. Без Client Hints больше вариативности = БОЛЬШЕ палевно (не делать «просто больше UA-строк»).
+Альтернатива: обновить Electron → реальный Chromium свежее → честный UA новой версии без рассинхрона.
+
 ---
 
 ## Что это
