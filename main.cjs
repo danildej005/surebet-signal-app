@@ -12,7 +12,7 @@ const { formatSignal } = require("./lib/format.cjs");
 const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
-const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
+const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, randomUA, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 const fx = require("./lib/fx.cjs");
 const { parseMoney, vilkaStakes } = require("./lib/vilka.cjs");
@@ -289,10 +289,14 @@ async function navigateToEventByName(booker, win, subject) {
         inp.dispatchEvent(new Event("keyup", { bubbles: true }));
         await SLEEP(1900);
       }
+      const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\\u0300-\\u036f]/g, "");
+      const NAMEn = norm(NAME);
+      // ЦЕЛЫЙ токен, а не подстрока: «Eala» НЕ должен матчить «New zEALAnd» (был ложный клик)
+      const hasTok = (txt) => norm(txt).split(/[^a-z0-9]+/).filter(Boolean).includes(NAMEn);
       const links = [...document.querySelectorAll("a[href]")];
-      const linkHit = links.find((a) => (a.innerText || "").toLowerCase().includes(NAME));
+      const linkHit = links.find((a) => hasTok(a.innerText));
       const named = [...document.querySelectorAll("a,[onclick],[class*=event],[class*=game],[class*=match],[class*=row]")]
-        .filter((e) => e.offsetParent !== null && (e.innerText || "").toLowerCase().includes(NAME))
+        .filter((e) => e.offsetParent !== null && hasTok(e.innerText))
         .sort((a, b) => (a.innerText || "").length - (b.innerText || "").length);
       let clicked = false, how = null, href = null, text = null;
       if (linkHit) { href = linkHit.getAttribute("href"); text = (linkHit.innerText || "").replace(/\\s+/g, " ").slice(0, 60); linkHit.click(); clicked = true; how = "link"; }
@@ -309,10 +313,18 @@ async function navigateToEventByName(booker, win, subject) {
       logger.log("INFO", "  [поиск матча] frame:", furl, "→", JSON.stringify(r));
       if (r && r.clicked) break;
     }
+    const surTok = surname.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     for (let i = 0; i < 8; i++) {
       await sleep(1000);
       if (win.isDestroyed()) return;
-      if (isEventUrl(win.webContents.getURL())) { logger.log("INFO", "  событие найдено по имени:", win.webContents.getURL()); return; }
+      const u = win.webContents.getURL();
+      if (!isEventUrl(u)) continue;
+      // СВЕРКА: открылось событие ИМЕННО нужного игрока? (защита от ложного клика «Eala»→«Zealand»)
+      const slugTokens = u.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").split(/[^a-z0-9]+/);
+      if (slugTokens.includes(surTok)) { logger.log("INFO", "  событие найдено по имени:", u); return; }
+      logger.log("WARN", "  открылось ЧУЖОЕ событие (нет «" + surTok + "» в URL), отменяю:", u);
+      try { await win.loadURL(booker.url || "about:blank"); } catch (_) {} // увести с чужого → плечо не откроется → цикл скипнет
+      return;
     }
     logger.log("WARN", "  событие по имени не открылось (subject:", subject + ")");
   } catch (e) { logger.log("WARN", "navigateToEventByName:", e); }
@@ -332,9 +344,15 @@ function normalizeBooker(b) {
 }
 
 // Разметка купона по конторе: селектор кнопок-исходов, поле суммы, слова на кнопке постановки.
+// confirmSel — селектор кнопки ПОДТВЕРЖДЕНИЯ в модалке после кнопки постановки (если контора её показывает).
+// Pinnacle: после «CONFIRM … SINGLE BET» вылетает модалка с «OK» (.confirm-bet-modal-btn-ok) — без неё ставка НЕ принята.
+// Betano: наличие модалки после «BET NOW» НЕ подтверждено — проверить вживую (пока null).
+// clearSel — кнопки «удалить выбор» в купоне (крестики), чтобы держать купон ЧИСТЫМ и готовым к ставке.
+// Pinnacle: крестики .CloseStyled-* (в снимке 3 шт = 3 накопленных). Betano: чистим повторным кликом (deselect),
+// placed-ставки («CASH OUT») не трогаются. clearSel у Betano пока null (не подтверждён селектор удаления).
 const BETSLIP = {
-  betano: { outcomeSel: ".selections__selection", stake: 'input[id^="stakeInput"]', placeWords: ["BET NOW"] },
-  pinnacle: { outcomeSel: '[id*="|"]', stake: 'input[name="stake"]', placeWords: ["CONFIRM", "SINGLE BET"] },
+  betano: { outcomeSel: ".selections__selection", stake: 'input[id^="stakeInput"]', placeWords: ["BET NOW"], confirmSel: null, clearSel: null },
+  pinnacle: { outcomeSel: '[id*="|"]', stake: 'input[name="stake"]', placeWords: ["CONFIRM", "SINGLE BET"], confirmSel: ".confirm-bet-modal-btn-ok", clearSel: '[class*="CloseStyled"]' },
 };
 const ODDS_TOLERANCE = 0.05; // допустимое падение кэфа (5%)
 
@@ -342,22 +360,48 @@ const ODDS_TOLERANCE = 0.05; // допустимое падение кэфа (5%
 // Pinnacle печатает «Max bet USDT 10,035.00» под полем суммы — читаем текст.
 // Betano прячет за кнопкой MAX — кликаем её, она вписывает макс в поле, читаем поле.
 const PINN_MAX_JS = `(() => {
-  const el = [...document.querySelectorAll('div,span,p')].find((e) => /max\\s*bet/i.test(e.innerText || '') && /\\d/.test(e.innerText || ''));
-  return el ? (el.innerText || '').replace(/\\s+/g, ' ').trim() : null;
+  // берём САМЫЙ МАЛЕНЬКИЙ (лист) элемент с «Max bet», иначе схватим родителя с кучей чисел → каша (2.3e15)
+  const els = [...document.querySelectorAll('div,span,p,td,li')]
+    .filter((e) => /max\\s*bet/i.test(e.innerText || '') && /\\d/.test(e.innerText || ''))
+    .sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
+  const t = els[0] ? (els[0].innerText || '').replace(/\\s+/g, ' ').trim() : '';
+  if (!t) return null;
+  // вытаскиваем число СРАЗУ после «Max bet», чтобы не прихватить посторонние числа из того же блока
+  const m = t.match(/max\\s*bet[^\\d]*([\\d.,]+)/i);
+  return m ? m[1] : t;
 })()`;
 const BETANO_MAX_JS = `(async () => {
   const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms));
   const btn = document.querySelector('.max-button') || [...document.querySelectorAll('button')].find((b) => (b.innerText || '').trim().toUpperCase() === 'MAX');
-  if (!btn) return null;
-  btn.click(); await SLEEP(700);
   const inp = document.querySelector('input[id^="stakeInput"]');
-  return inp ? inp.value : null;
+  if (!btn || !inp) return null;
+  btn.click();
+  // поле MAX заполняется С ЗАДЕРЖКОЙ (на 700мс было пусто) — поллим до ~4с, вернём как заполнится
+  for (let i = 0; i < 10; i++) { await SLEEP(400); if (inp.value) return inp.value; }
+  return inp.value || null;
+})()`;
+// ДИАГНОСТИКА Betano-MAX: почему вернулся null (нашлась ли кнопка MAX, есть ли поле ставки, что на купоне)
+const BETANO_MAXDIAG_JS = `(() => {
+  const maxBtn = document.querySelector('.max-button');
+  const txtBtn = [...document.querySelectorAll('button')].find((b) => (b.innerText || '').trim().toUpperCase() === 'MAX');
+  const inp = document.querySelector('input[id^="stakeInput"]');
+  const btns = [...document.querySelectorAll('button')].map((b) => (b.innerText || '').replace(/\\s+/g, ' ').trim()).filter(Boolean).slice(0, 14);
+  return { maxButton: !!maxBtn, maxTextButton: !!txtBtn, stakeInput: !!inp, inputVal: inp ? inp.value : null, buttons: btns };
 })()`;
 async function readBookmakerMax(win, id) {
   const js = id === "pinnacle" ? PINN_MAX_JS : id === "betano" ? BETANO_MAX_JS : null;
   if (!js) return null;
-  try { const raw = await win.webContents.executeJavaScript(js); const n = parseMoney(raw); return n > 0 ? n : null; }
-  catch (e) { logger.log("WARN", "чтение макса:", id, e.message); return null; }
+  try {
+    const raw = await win.webContents.executeJavaScript(js);
+    const n = parseMoney(raw);
+    if (!(n > 0) && id === "betano") {
+      try {
+        const d = await win.webContents.executeJavaScript(BETANO_MAXDIAG_JS);
+        logger.log("INFO", "  [диаг макса betano] raw=", JSON.stringify(raw), "|", JSON.stringify(d));
+      } catch (_) {}
+    }
+    return n > 0 ? n : null;
+  } catch (e) { logger.log("WARN", "чтение макса:", id, e.message); return null; }
 }
 
 // Чтение БАЛАНСА счёта (в валюте конторы). Эвристика: листовые элементы шапки с валютой+числом,
@@ -366,29 +410,87 @@ async function readBookmakerMax(win, id) {
 const BAL_JS = (cur, excl) => `(() => {
   const out = [];
   document.querySelectorAll('*').forEach((e) => {
-    if (e.children.length) return;
-    const t = (e.innerText || '').trim();
+    // раньше брали только листья; но баланс в шапке Pinnacle разбит на «USDT» + «23.00» в разных <span>,
+    // поэтому разрешаем и НЕБОЛЬШИЕ контейнеры (≤4 потомков) с коротким текстом
+    if (e.querySelectorAll('*').length > 4) return;
+    const t = (e.innerText || '').replace(/\\s+/g, ' ').trim();
     if (!t || t.length > 22 || !${cur}.test(t) || !/\\d/.test(t)) return;
     let top = 99999; try { top = Math.round(e.getBoundingClientRect().top); } catch (e) {}
     const range = /\\d[^\\d]*[-\\u2013][^\\d]*\\d/.test(t); // «20 € - 50 €» (виджет ставок) — не баланс
     out.push({ t, top, skip: ${excl}.test(t) || range });
   });
-  return out.slice(0, 25);
+  // дедуп по тексту+позиции (родитель и потомок с одинаковым innerText)
+  const seen = new Set();
+  return out.filter((c) => { const k = c.t + '|' + c.top; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 25);
 })()`;
 const PINN_BAL_JS = BAL_JS("/usdt|usd|\\\\$/i", "/max|bet|potential|win/i");
 const BETANO_BAL_JS = BAL_JS("/€|eur/i", "/max|bet now|potential|win|stake/i");
+// ДИАГНОСТИКА: выкладывает в лог содержимое ШАПКИ (верхняя полоса) — чтобы увидеть, как реально
+// представлен баланс, если эвристика его не поймала. Снести, когда ридер баланса станет надёжным.
+const HEADER_DIAG_JS = `(() => {
+  const out = [];
+  document.querySelectorAll('*').forEach((e) => {
+    let r; try { r = e.getBoundingClientRect(); } catch (_) { return; }
+    if (r.top < 0 || r.top > 200) return; // верхняя полоса (шапка)
+    const t = (e.innerText || '').replace(/\\s+/g, ' ').trim();
+    if (!t || t.length > 40) return;
+    if (!/[€$]|usd|eur|\\d[.,]\\d/i.test(t)) return; // только похожее на деньги/валюту
+    out.push({ t, top: Math.round(r.top), nd: e.querySelectorAll('*').length, tag: e.tagName, cls: (e.className || '').toString().slice(0, 36) });
+  });
+  const seen = new Set();
+  return out.filter((c) => { const k = c.t + '|' + c.top; if (seen.has(k)) return false; seen.add(k); return true; })
+            .sort((a, b) => a.top - b.top).slice(0, 50);
+})()`;
 async function readBookmakerBalance(win, id) {
   const js = id === "pinnacle" ? PINN_BAL_JS : id === "betano" ? BETANO_BAL_JS : null;
   if (!js) return null;
   try {
     const cands = await win.webContents.executeJavaScript(js);
-    if (!Array.isArray(cands) || !cands.length) { logger.log("INFO", "баланс", id, ": кандидатов нет"); return null; }
-    const usable = cands.filter((c) => !c.skip).sort((a, b) => a.top - b.top);
-    const best = usable[0] || cands.filter((c) => !c.skip)[0];
+    if (!Array.isArray(cands) || !cands.length) { logger.log("INFO", "баланс", id, ": кандидатов нет"); }
+    // баланс — в ШАПКЕ (top<250). Эхо максбета из купона (Betano «119,04 €» top 752) — НЕ баланс.
+    const usable = (cands || []).filter((c) => !c.skip && c.top < 250).sort((a, b) => a.top - b.top);
+    const best = usable[0];
     const value = best ? parseMoney(best.t) : null;
-    logger.log("INFO", "баланс", id, "=", value, "| кандидаты:", JSON.stringify(cands.slice(0, 8)));
+    logger.log("INFO", "баланс", id, "=", value, "| кандидаты:", JSON.stringify((cands || []).slice(0, 8)));
+    // пока баланс не читается надёжно (Betano до сих пор null) — дампим шапку для отладки
+    if (!(value > 0)) {
+      try {
+        const hdr = await win.webContents.executeJavaScript(HEADER_DIAG_JS);
+        logger.log("INFO", "  [диаг шапки " + id + "]:", JSON.stringify(hdr));
+      } catch (_) {}
+    }
     return value > 0 ? value : null;
   } catch (e) { logger.log("WARN", "чтение баланса:", id, e.message); return null; }
+}
+
+// Закрыть cookie/TCF-согласие, если оно перекрыло страницу (иначе купон Betano не доступен —
+// «List of Vendors»/«Allow All» в логе). Владелец явно разрешил жать вместо него. Приоритет:
+// сперва «только необходимые/Reject» (приватнее и тоже убирает оверлей), иначе «принять все».
+const CONSENT_JS = `(() => {
+  const REJECT = /^(reject all|reject|decline|necessary only|only necessary|rejeitar( tudo)?|apenas (as )?necess[aá]ri\\w*|recusar)$/i;
+  const ACCEPT = /^(allow all|accept all|accept|permitir todos|aceitar( tudo)?|concordo|i agree|agree|ok|got it|entendi|aceito|continuar)$/i;
+  // ВНЕ консент-контейнера жмём ТОЛЬКО однозначные фразы (чтобы не нажать обычную «OK»/«Continuar»)
+  const STRICT = /^(allow all|accept all|reject all|permitir todos|aceitar tudo|rejeitar tudo)$/i;
+  const inConsent = (el) => !!el.closest('[id*="onetrust" i],[class*="onetrust" i],[id*="consent" i],[class*="consent" i],[id*="cookie" i],[class*="cookie" i],[class*="didomi" i],[id*="sp_message" i],[class*="cmp" i],[class*="gdpr" i],[class*="qc-cmp" i]');
+  // ВИДИМОСТЬ через rect, а НЕ offsetParent: cookie-оверлеи это position:fixed → offsetParent=null,
+  // и старый фильтр выбрасывал саму кнопку «Allow All». Теперь ловим её.
+  const vis = (x) => { try { const r = x.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch (_) { return false; } };
+  const btns = [...document.querySelectorAll('button,[role=button],a')].filter(vis);
+  const txt = (x) => (x.innerText || '').replace(/\\s+/g, ' ').trim();
+  // в консент-контейнере: reject → accept; вне контейнера — только однозначные STRICT-фразы
+  let b = btns.find((x) => REJECT.test(txt(x)) && inConsent(x))
+       || btns.find((x) => ACCEPT.test(txt(x)) && inConsent(x))
+       || btns.find((x) => STRICT.test(txt(x)));
+  if (b) { b.click(); return txt(b); }
+  return null;
+})()`;
+async function dismissConsent(win) {
+  if (!win || win.isDestroyed()) return false;
+  try {
+    const clicked = await win.webContents.executeJavaScript(CONSENT_JS);
+    if (clicked) { logger.log("INFO", "  cookie-согласие закрыто кнопкой:", clicked); await sleep(900); return true; }
+  } catch (e) { logger.log("WARN", "dismissConsent:", e.message); }
+  return false;
 }
 
 // === Шаги простановки (переиспользуются в placeBet ОДНОГО плеча и в оркестраторе runBot) ===
@@ -400,13 +502,16 @@ async function selectLegOutcome(id) {
   const cfg = BETSLIP[id];
   if (!cfg) return { ok: false, error: "нет разметки купона «" + id + "»" };
   const bet = pendingBet.get(id) || {};
-  let selected = null, selectedOdds = null, how = null;
+  let selected = null, selectedOdds = null, how = null, pickedIndex = null;
   if (cfg.outcomeSel) {
     const sel = cfg.outcomeSel;
     const unit = marketUnit(bet.descFull); // сеты/геймы — для вкладки Pinnacle и маппинга фора→счёт
+    await dismissConsent(win); // снять cookie/TCF-оверлей, если перекрыл купон (иначе кнопок/поля нет)
+    await clearBetslip(win, cfg); // купон ВСЕГДА чист перед выбором (убрать накопленные неподтверждённые)
     // Дождаться, пока контора ПРОРИСУЕТ кнопки исходов (Pinnacle standard SPA рендерит ~10с) —
     // иначе читаем пустую страницу и получаем «кнопок:0».
     for (let i = 0; i < 15; i++) {
+      await dismissConsent(win); // cookie-оверлей может всплыть ПОЗЖЕ начального — ловим его в цикле
       let n = 0; try { n = await win.webContents.executeJavaScript(`document.querySelectorAll(${JSON.stringify(sel)}).length`); } catch { /* ignore */ }
       if (n > 0) break;
       await sleep(1000);
@@ -436,17 +541,69 @@ async function selectLegOutcome(id) {
     let eventUrl = ""; try { eventUrl = win.webContents.getURL(); } catch { /* ignore */ }
     const choice = pickOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons, eventUrl, unit, subject: extractSubject(bet.descFull) });
     if (!choice) return { ok: false, win, cfg, bet, error: "не нашёл исход (линия/кэф). desc=" + (bet.desc || "—") + " кэф=" + (bet.expectedOdds || "?") + " кнопок:" + buttons.length };
-    selected = choice.text; selectedOdds = choice.odds; how = choice.how;
+    selected = choice.text; selectedOdds = choice.odds; how = choice.how; pickedIndex = choice.i;
     try {
       const clicked = await win.webContents.executeJavaScript(`(() => { const els = [...document.querySelectorAll(${JSON.stringify(sel)})]; const el = els[${Number(choice.i)}]; if (el) { el.click(); return true; } return false; })()`);
       if (!clicked) return { ok: false, win, cfg, bet, selected, selectedOdds, how, error: "кнопка исхода не кликнулась (i=" + choice.i + ")" };
     } catch (e) { return { ok: false, win, cfg, bet, selected, selectedOdds, how, error: "клик исхода: " + e.message }; }
     await sleep(800);
   }
+  if (cfg.outcomeSel) await dismissConsent(win); // оверлей мог всплыть к моменту чтения макса — закрыть
   const maxStake = cfg.outcomeSel ? await readBookmakerMax(win, id) : null;
   const exp = bet.expectedOdds;
   const oddsOk = (exp && selectedOdds) ? (selectedOdds >= exp * (1 - ODDS_TOLERANCE)) : null;
-  return { ok: true, win, cfg, bet, selected, selectedOdds, how, maxStake, expectedOdds: exp || null, oddsOk };
+  return { ok: true, win, cfg, bet, selected, selectedOdds, how, maxStake, expectedOdds: exp || null, oddsOk, selectedIndex: pickedIndex };
+}
+
+// Снять свой выбор (повторный клик по той же кнопке-исходу = убрать из купона). Чтобы купон не
+// копил «осиротевшие» ставки от скипнутых циклов (иначе Betano собирает экспресс → MAX/сумма ломаются).
+async function deselectLeg(id, index) {
+  if (index == null) return;
+  const win = bookerWins.get(id), cfg = BETSLIP[id];
+  if (!win || win.isDestroyed() || !cfg || !cfg.outcomeSel) return;
+  try {
+    await win.webContents.executeJavaScript(`(() => { const els = [...document.querySelectorAll(${JSON.stringify(cfg.outcomeSel)})]; const el = els[${Number(index)}]; if (el) { el.click(); return true; } return false; })()`);
+    await sleep(400);
+    logger.log("INFO", "  купон: снял выбор", id, "(i=" + index + ")");
+  } catch (e) { logger.log("WARN", "deselectLeg:", id, e.message); }
+}
+// ПОЛНАЯ ОЧИСТКА купона — убрать ВСЕ накопленные (неподтверждённые) выборы крестиками, чтобы купон
+// был всегда чист и готов к ставке. placed-ставки (с «CASH OUT») крестиков не имеют — не трогаются.
+async function clearBetslip(win, cfg) {
+  if (!win || win.isDestroyed() || !cfg || !cfg.clearSel) return;
+  try {
+    for (let i = 0; i < 6; i++) {
+      const n = await win.webContents.executeJavaScript(`(() => { const els = [...document.querySelectorAll(${JSON.stringify(cfg.clearSel)})]; els.forEach((b) => { try { b.click(); } catch (_) {} }); return els.length; })()`);
+      if (!n) break;
+      await sleep(400);
+    }
+  } catch (e) { logger.log("WARN", "clearBetslip:", e.message); }
+}
+// ДИАГНОСТИКА купона: кандидаты в кнопки «удалить ставку» (если повторный клик не чистит купон,
+// по этому найду точный селектор полной очистки). Срабатывает только при обнаруженном накоплении.
+const SLIP_DIAG_JS = `(() => {
+  const rx = /remove|delete|close|clear|trash|remover|eliminar|limpar|fechar|excluir|apagar/i;
+  const out = [];
+  document.querySelectorAll('button,[role=button],a,[aria-label],[title]').forEach((e) => {
+    const al = (e.getAttribute('aria-label') || e.getAttribute('title') || '');
+    const cls = (e.className || '').toString();
+    const t = (e.innerText || '').replace(/\\s+/g, ' ').trim();
+    if (!(rx.test(al) || rx.test(cls) || t === '×' || t === '✕' || /^[xX]$/.test(t))) return;
+    let top = -1; try { top = Math.round(e.getBoundingClientRect().top); } catch (_) {}
+    out.push({ tag: e.tagName, al: al.slice(0, 30), cls: cls.slice(0, 44), t: t.slice(0, 12), top });
+  });
+  const seen = new Set();
+  return out.filter((c) => { const k = c.tag + c.al + c.cls + c.top; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 30);
+})()`;
+// Снимок окна конторы (PNG) — визуальное доказательство, что купон реально открыт и заполнен.
+async function screenshotBooker(win, id) {
+  try {
+    if (!win || win.isDestroyed()) return null;
+    const img = await win.webContents.capturePage();
+    const file = join(logger.dir() || app.getPath("userData"), `betslip-${id}.png`);
+    require("node:fs").writeFileSync(file, img.toPNG());
+    return file;
+  } catch (e) { logger.log("WARN", "screenshot:", id, e.message); return null; }
 }
 
 // Шаг 2: вписать сумму (React value-tracker) + найти кнопку постановки. Исход уже выбран.
@@ -471,15 +628,45 @@ async function fillStakeOnly(win, cfg, stake) {
   catch (e) { return { error: e.message }; }
 }
 
-// Шаг 3: боевой клик по кнопке постановки.
+// Шаг 3: боевой клик по кнопке постановки + ПОДТВЕРЖДЕНИЕ модалки (Pinnacle «OK»).
 async function clickPlace(win, cfg) {
   try {
-    return await win.webContents.executeJavaScript(`(() => {
+    const clicked = await win.webContents.executeJavaScript(`(() => {
       const words = ${JSON.stringify(cfg.placeWords)};
       const b = [...document.querySelectorAll("button")].find((x) => { const t = (x.innerText || "").toUpperCase(); return words.every((w) => t.includes(w.toUpperCase())); });
-      if (b) b.click(); return !!b;
+      if (b) { b.click(); return true; } return false;
     })()`);
+    if (!clicked) return false;
+    // После кнопки постановки контора может показать модалку подтверждения — без неё ставка НЕ принята.
+    // Поллим до ~3с и кликаем «OK» (Pinnacle: .confirm-bet-modal-btn-ok).
+    if (cfg.confirmSel) {
+      for (let i = 0; i < 8; i++) {
+        await sleep(400);
+        const ok = await win.webContents.executeJavaScript(`(() => { const el = document.querySelector(${JSON.stringify(cfg.confirmSel)}); if (el) { el.click(); return true; } return false; })()`);
+        if (ok) { logger.log("INFO", "  ставка: подтвердил модалку (OK)"); break; }
+      }
+    }
+    return true;
   } catch { return false; }
+}
+
+// Проверка, что ставка ПРИНЯТА конторой: после успешной постановки кнопка постановки ИСЧЕЗАЕТ
+// (купон → чек/приём) и модалка подтверждения закрыта. Если кнопка осталась — НЕ принято.
+// Консервативно: не уверены = НЕ принято (лучше ложный стоп, чем незамеченная экспозиция).
+async function verifyPlaced(win, cfg) {
+  if (!win || win.isDestroyed() || !cfg) return false;
+  const js = `(() => {
+    const words = ${JSON.stringify(cfg.placeWords)};
+    const stillBtn = [...document.querySelectorAll("button")].some((b) => { const t = (b.innerText || "").toUpperCase(); return words.every((w) => t.includes(w.toUpperCase())); });
+    const modal = ${cfg.confirmSel ? JSON.stringify(cfg.confirmSel) : "null"};
+    const modalOpen = modal ? !!document.querySelector(modal) : false;
+    return !stillBtn && !modalOpen; // принято = кнопки постановки и модалки больше нет
+  })()`;
+  for (let i = 0; i < 10; i++) {
+    await sleep(400);
+    try { if (await win.webContents.executeJavaScript(js)) return true; } catch (_) { /* ignore */ }
+  }
+  return false;
 }
 
 // Простановка ОДНОГО плеча (IPC dry-run/place): выбор → сумма → (live) клик.
@@ -541,25 +728,29 @@ async function findVilka(skip = []) {
   try {
     return await surebetWin.webContents.executeJavaScript(`(() => {
       const SKIP = ${JSON.stringify(skip)};
+      let records = 0, pairs = 0, fresh = 0, hit = null; // счётчики для «пульса» (почему бот простаивает)
       for (const tb of document.querySelectorAll('tbody.surebet_record')) {
+        records++;
         const books = [...tb.querySelectorAll('[data-testid="surebet-leg-bookmaker"]')].map((e) => (e.innerText || '').trim());
         const byProng = {}; let token = '';
         tb.querySelectorAll('a[href*="/nav/surebet/prong/"]').forEach((a) => {
           const m = (a.getAttribute('href') || a.href || '').match(/\\/prong\\/(\\d+)\\/([^/]+)/);
           if (m) { if (byProng[m[1]] === undefined) byProng[m[1]] = a; token = m[2]; }
         });
-        if (token && SKIP.indexOf(token) >= 0) continue;
         let bi = -1, pi = -1;
         books.forEach((nm, i) => {
           const low = nm.toLowerCase();
           if (/betano/.test(low) && bi < 0) bi = i;
           else if (/pinnacle/.test(low) && /delayed/.test(low) && pi < 0) pi = i;
         });
-        if (bi >= 0 && pi >= 0 && byProng[bi] && byProng[pi]) {
-          return { ok: true, token, betano: { name: books[bi], prong: bi }, pinnacle: { name: books[pi], prong: pi } };
-        }
+        if (!(bi >= 0 && pi >= 0 && byProng[bi] && byProng[pi])) continue; // не пара Betano+Pinnacle(Delayed)
+        pairs++;
+        if (token && SKIP.indexOf(token) >= 0) continue; // уже пробованная
+        fresh++;
+        if (!hit) hit = { token, betano: { name: books[bi], prong: bi }, pinnacle: { name: books[pi], prong: pi } };
       }
-      return { ok: false };
+      if (hit) return { ok: true, records, pairs, fresh, token: hit.token, betano: hit.betano, pinnacle: hit.pinnacle };
+      return { ok: false, records, pairs, fresh };
     })()`);
   } catch (e) { return { ok: false, error: "чтение сканера: " + e.message }; }
 }
@@ -597,18 +788,117 @@ async function waitBookerEvent(id, tries = 40) {
 }
 
 let botBusy = false;
+let lastBotHeartbeat = 0;      // троттлинг ЛОГА простоя (раз в ~минуту)
+let botWaitMsg = null;         // причина паузы-ожидания (нехватка баланса плеча) — НЕ выключаемся, ждём
+let botPulseState = { records: 0, pairs: 0, fresh: 0, error: null }; // для живого пульса в панель
+// Отправить живой статус бота в панель (видно: жив / ждёт / обрабатывает / ошибка)
+function sendBotPulse(extra) {
+  if (!panelWin || panelWin.isDestroyed()) return;
+  try {
+    panelWin.webContents.send("bot-pulse", {
+      armed: botArmed, busy: botBusy, tried: triedVilkas.size,
+      success: botStats ? botStats.completed : 0, target: TEST_TARGET,
+      records: botPulseState.records, pairs: botPulseState.pairs, fresh: botPulseState.fresh,
+      // счётчики сессии: всего обработано / оба плеча (хедж) / незахеджировано / пропущено
+      total: botStats ? botStats.attempts : 0, hedged: botStats ? botStats.hedged : 0,
+      exposed: botStats ? botStats.exposed : 0, skipped: botStats ? botStats.skipped : 0,
+      wait: botWaitMsg, error: botPulseState.error, at: Date.now(), ...(extra || {}),
+    });
+  } catch (_) { /* ignore */ }
+}
 let botArmed = false;          // «взведён»: ждём вилку и отрабатываем цикл
 let botArmLive = false;        // боевой ли цикл (только при тумблере БОЕВОЙ)
-const triedVilkas = new Set(); // токены вилок, которые бот пробовал и не смог → пропускаем дальше
+const triedVilkas = new Set(); // токены вилок, которые бот пробовал → пропускаем дальше (и успех, и скип)
+
+// === Тест-режим: бот НЕ останавливается на успехе, крутит до TEST_TARGET успешных циклов, потом отчёт ===
+const TEST_TARGET = 10;        // сколько успешных циклов собрать в тесте
+let botStats = null;           // счётчики текущего захода (null = ещё не взводили)
+function newBotStats() {
+  return { startedAt: Date.now(), attempts: 0, completed: 0, skipped: 0, skipReasons: {}, sports: {}, completedDetails: [],
+           hedged: 0, exposed: 0, placeNone: 0, // боевые: оба приняты / экспозиция / Betano не принят
+           reads: { bMax: 0, bBal: 0, pMax: 0, pBal: 0, bothOddsOk: 0 } };
+}
+// категория причины скипа (для сводки)
+function skipCategory(reason) {
+  const r = String(reason || "");
+  if (/Betano:.*не нашёл исход/i.test(r)) return "Betano: не нашёл исход";
+  if (/Pinnacle:.*не нашёл исход/i.test(r)) return "Pinnacle: не нашёл исход";
+  if (/Betano:.*событие не открыл/i.test(r)) return "Betano: событие не открылось";
+  if (/Pinnacle:.*событие не открыл/i.test(r)) return "Pinnacle: событие не открылось";
+  if (/плечо не кликнул/i.test(r)) return "плечо не кликнулось";
+  if (/расчёт без сумм/i.test(r)) return "расчёт без сумм";
+  return r.slice(0, 40) || "прочее";
+}
+function recordBotStat(res) {
+  if (!botStats || res.waiting) return; // ожидание баланса — не вилка-результат, не считаем
+  botStats.attempts++;
+  if (res.skipped) {
+    botStats.skipped++;
+    const c = skipCategory(res.reason);
+    botStats.skipReasons[c] = (botStats.skipReasons[c] || 0) + 1;
+  } else if (res.ok) {
+    botStats.completed++;
+    botStats.sports[res.sport || "?"] = (botStats.sports[res.sport || "?"] || 0) + 1;
+    if (res.betano.max > 0) botStats.reads.bMax++;
+    if (res.betano.balance > 0) botStats.reads.bBal++;
+    if (res.pinnacle.max > 0) botStats.reads.pMax++;
+    if (res.pinnacle.balance > 0) botStats.reads.pBal++;
+    if (res.betano.oddsOk !== false && res.pinnacle.oddsOk !== false) botStats.reads.bothOddsOk++;
+    if (res.hedge === "ok") botStats.hedged++;
+    else if (res.hedge === "exposed") botStats.exposed++;
+    else if (res.hedge === "none") botStats.placeNone++;
+    botStats.completedDetails.push({
+      n: botStats.completed, sport: res.sport, pair: res.pair, profitPct: res.profitPct,
+      b: res.betano.selected, bMax: res.betano.max, bBal: res.betano.balance,
+      p: res.pinnacle.selected, pMax: res.pinnacle.max, pBal: res.pinnacle.balance,
+    });
+    logger.log("INFO", "[бот ТЕСТ] успешный цикл " + botStats.completed + "/" + TEST_TARGET + " · " + (res.sport || "?") + " · " + res.profitPct + "%");
+  }
+}
+function formatBotStats(s) {
+  const secs = Math.round((Date.now() - s.startedAt) / 1000);
+  const dur = Math.floor(secs / 60) + "м " + (secs % 60) + "с";
+  const profits = s.completedDetails.map((d) => d.profitPct).filter((x) => typeof x === "number");
+  const avg = profits.length ? (profits.reduce((a, b) => a + b, 0) / profits.length) : 0;
+  const L = [];
+  L.push("════ СТАТИСТИКА ТЕСТА (" + s.completed + " успешных циклов) ════");
+  L.push("Длительность: " + dur);
+  L.push("Вилок поймано: " + s.attempts + " (успешно " + s.completed + ", пропущено " + s.skipped + ")");
+  L.push("Хит-рейт: " + (s.attempts ? Math.round((s.completed / s.attempts) * 100) : 0) + "%");
+  L.push("— БОЕВОЙ: оба плеча (хедж): " + s.hedged + " | НЕЗАХЕДЖИРОВАНО: " + s.exposed + " | Betano не принят: " + s.placeNone);
+  L.push("— Пропуски по причинам:");
+  Object.entries(s.skipReasons).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => L.push("    " + k + ": " + v));
+  L.push("— Успешные по спорту:");
+  Object.entries(s.sports).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => L.push("    " + k + ": " + v));
+  L.push("— Чтение данных (из " + s.completed + " успешных):");
+  L.push("    Betano макс: " + s.reads.bMax + "/" + s.completed + " | баланс: " + s.reads.bBal + "/" + s.completed + " (баланс by design ?)");
+  L.push("    Pinnacle макс: " + s.reads.pMax + "/" + s.completed + " | баланс: " + s.reads.pBal + "/" + s.completed);
+  L.push("    кэф oddsOk обоих: " + s.reads.bothOddsOk + "/" + s.completed);
+  L.push("— Профит: средн " + (Math.round(avg * 100) / 100) + "% | мин " + (profits.length ? Math.min(...profits) : 0) + "% | макс " + (profits.length ? Math.max(...profits) : 0) + "%");
+  L.push("— Детали успешных:");
+  s.completedDetails.forEach((d) => L.push("    " + d.n + ". " + (d.sport || "?") + " · " + d.pair + " · B[" + d.b + "] maxB=" + d.bMax + " balB=" + d.bBal + " | P[" + d.p + "] maxP=" + d.pMax + " balP=" + d.pBal + " · " + d.profitPct + "%"));
+  return L.join("\n");
+}
 
 // Один цикл: поймать+кликнуть НОВУЮ (не пробованную) вилку → события → выбор → расчёт → суммы →
 // (live) клик. Возврат: null — подходящей вилки сейчас нет (ждём); {skipped} — вилку не смог,
 // занёс в пропуск, ищем дальше; {ok} — успех (бот разоружается).
 async function runOneBotCycle(live = false) {
   botBusy = true;
+  botWaitMsg = null; // сброс ожидания; выставится заново, если плечо снова не покрывается
   try {
     const v = await findVilka([...triedVilkas]);
-    if (!v.ok) return null; // нет НОВОЙ подходящей вилки — ждём следующий тик
+    botPulseState = { records: v.records || 0, pairs: v.pairs || 0, fresh: v.fresh || 0, error: v.error || null };
+    if (!v.ok) {
+      // «пульс»: бот ЖИВ, просто нет новой годной вилки. В панель — сразу, в ЛОГ — раз в ~минуту.
+      sendBotPulse();
+      const now = Date.now();
+      if (now - lastBotHeartbeat > 55000) {
+        lastBotHeartbeat = now;
+        logger.log("INFO", "[бот] жив, жду вилку: в фиде", v.records || 0, "записей | годных пар Betano+Pinnacle(Delayed):", v.pairs || 0, "| новых (не пробованных):", v.fresh || 0, "| уже пробовано:", triedVilkas.size);
+      }
+      return null; // нет НОВОЙ подходящей вилки — ждём следующий тик
+    }
     const tok = v.token || "";
     const pair = (v.betano.name || "Betano") + " + " + (v.pinnacle.name || "Pinnacle");
     // на любом провале — заносим вилку в «пробованные» и просим бота искать дальше (skipped)
@@ -624,30 +914,85 @@ async function runOneBotCycle(live = false) {
     const sB = await selectLegOutcome("betano");
     if (!sB.ok) return skip("Betano: " + sB.error);
     const sP = await selectLegOutcome("pinnacle");
-    if (!sP.ok) return skip("Pinnacle: " + sP.error);
-    // баланс счёта → тоже в потолок: эффективный потолок плеча = min(макс конторы, баланс)
-    const balB = await readBookmakerBalance(sB.win, "betano");
-    const balP = await readBookmakerBalance(sP.win, "pinnacle");
-    const capEur = Math.min(sB.maxStake || Infinity, balB || Infinity);
+    // Pinnacle не вышел, а Betano уже выбран → снимаем выбор Betano, чтобы купон не копил экспресс
+    if (!sP.ok) { await deselectLeg("betano", sB.selectedIndex); return skip("Pinnacle: " + sP.error); }
+    // ПОТОЛОК ПЛЕЧА.
+    // Betano: НЕ читаем баланс для капа — ридер ненадёжен (хватает уже ПОСТАВЛЕННЫЕ ставки «Single X€»/
+    // «CASH OUT» и занижал ставку до копеек, по нарастающей). Кнопка MAX уже = min(макс события, баланс),
+    // поэтому Betano-кап = только maxStake.
+    const balB = null;
+    const balP = await readBookmakerBalance(sP.win, "pinnacle"); // Pinnacle-баланс надёжен (шапка «X USDT»)
+    const capEur = sB.maxStake || Infinity;
     const capUsd = Math.min(sP.maxStake || Infinity, balP || Infinity);
     const limit = Number(settings.vilkaLimitEur) > 0 ? Number(settings.vilkaLimitEur) : Infinity;
     const calc = vilkaStakes({ oddsEur: sB.selectedOdds, oddsUsd: sP.selectedOdds, usdToEur: fxRate.rate, maxEur: capEur, maxUsd: capUsd, limitEur: limit });
-    if (!(calc.eur > 0) || !(calc.usd > 0)) return skip("расчёт без сумм: " + (calc.error || "проверь кэфы/максы/баланс"));
+    if (!(calc.eur > 0) || !(calc.usd > 0)) {
+      await deselectLeg("betano", sB.selectedIndex); await deselectLeg("pinnacle", sP.selectedIndex); // оба выбора снять
+      return skip("расчёт без сумм: " + (calc.error || "проверь кэфы/максы/баланс"));
+    }
+    // БОЕВОЙ: ПЕРЕД первым плечом (Betano) убедиться, что ВТОРОЕ (Pinnacle) покроется балансом.
+    // Если нет — НЕ ставим вообще (нет экспозиции) и НЕ блоклистим вилку: остаёмся в ожидании пополнения.
+    if (live && (!(balP > 0) || calc.usd > balP)) {
+      await deselectLeg("betano", sB.selectedIndex); await deselectLeg("pinnacle", sP.selectedIndex);
+      botWaitMsg = "Pinnacle баланс " + (balP || 0) + " USDT < нужно " + calc.usd + " — жду пополнения (Betano не ставлю)";
+      logger.log("INFO", "[бот] " + botWaitMsg + " · остаюсь в ожидании, вилку не блоклистю");
+      return { waiting: true, reason: botWaitMsg, pair };
+    }
+    await dismissConsent(sB.win); await dismissConsent(sP.win); // снять оверлей перед заполнением купона
     const fB = await fillStakeOnly(sB.win, sB.cfg, calc.eur);
     const fP = await fillStakeOnly(sP.win, sP.cfg, calc.usd);
-    let placed = false;
+    let placed = false, hedge = null; // hedge: "ok"=оба приняты | "exposed"=Betano да, Pinnacle нет | "none"=Betano не принят
     if (live && fB.hasPlaceBtn && fP.hasPlaceBtn && sB.oddsOk !== false && sP.oddsOk !== false) {
-      await clickPlace(sB.win, sB.cfg); await clickPlace(sP.win, sP.cfg); placed = true;
+      // Betano ПЕРВЫМ → проверяем ПРИЁМ → Pinnacle ставим ТОЛЬКО если Betano принят (иначе обратная экспозиция).
+      await clickPlace(sB.win, sB.cfg);
+      const bOk = await verifyPlaced(sB.win, sB.cfg);
+      if (!bOk) {
+        hedge = "none"; // Betano не принял → Pinnacle НЕ ставим → экспозиции нет
+        logger.log("WARN", "[БОТ] Betano НЕ принял ставку — Pinnacle не ставлю (экспозиции нет)");
+      } else {
+        await clickPlace(sP.win, sP.cfg); // второе плечо — закрываем позицию безусловно
+        const pOk = await verifyPlaced(sP.win, sP.cfg);
+        placed = true;
+        hedge = pOk ? "ok" : "exposed";
+        if (!pOk) logger.log("ERROR", "🔴 [БОТ] НЕЗАХЕДЖИРОВАНО: Betano принят, Pinnacle НЕ принят — АВТО-СТОП");
+        else logger.log("INFO", "[БОТ] оба плеча приняты (хедж есть)");
+      }
     }
+    const sportOf = (u) => { const m = String(u || "").match(/\/standard\/([a-z-]+)\//i); return m ? m[1] : "?"; };
     const summary = {
-      ok: true, placed, profitable: calc.ok, rate: fxRate.rate, pair,
+      ok: true, placed, hedge, profitable: calc.ok, rate: fxRate.rate, pair, token: tok, sport: sportOf(bookerUrl("pinnacle")),
       profitPct: calc.profitPct, profitEur: calc.profitEur, totalEur: calc.totalEur,
       betano: { selected: sB.selected, odds: sB.selectedOdds, oddsOk: sB.oddsOk, max: sB.maxStake, balance: balB, stake: calc.eur, stakeValue: fB.stakeValue, placeBtn: fB.placeBtnText },
       pinnacle: { selected: sP.selected, odds: sP.selectedOdds, oddsOk: sP.oddsOk, max: sP.maxStake, balance: balP, stake: calc.usd, stakeValue: fP.stakeValue, placeBtn: fP.placeBtnText },
     };
+    if (tok) triedVilkas.add(tok); // успешную вилку тоже блоклистим — чтобы следующий цикл искал НОВУЮ
     logger.log("INFO", live ? "[БОТ PLACE]" : "[бот dry-run]", JSON.stringify(summary));
+    // КУПОН не должен копиться: реальная ставка очищает купон сама, а вот если НЕ поставили
+    // (dry-run; или кэф съехал и live-гейт не пустил) — выборы остаются и блокируют следующую ставку.
+    // Поэтому при !placed сразу снимаем ОБА выбора (повторный клик по тем же кнопкам = убрать из купона).
+    if (!placed) {
+      // DRY-RUN: дать УВИДЕТЬ заполненный купон (снимок-доказательство + пауза), потом уже чистим.
+      // Иначе авто-очистка снимает выбор за ~1.5с и кажется, будто купон «не открывался».
+      if (!live) {
+        const shotB = await screenshotBooker(sB.win, "betano");
+        const shotP = await screenshotBooker(sP.win, "pinnacle");
+        logger.log("INFO", "  [купон-снимок] betano:", shotB || "-", "| pinnacle:", shotP || "-", "— держу 4с, смотри купоны");
+        await sleep(4000);
+      }
+      // если видим накопление (Pinnacle «SINGLE BETS» мн.ч.) — повторный клик не справился: дамп кнопок «удалить»
+      if (/SINGLE BETS/i.test(fP.placeBtnText || "")) {
+        try { logger.log("INFO", "  [диаг купона betano]:", JSON.stringify(await sB.win.webContents.executeJavaScript(SLIP_DIAG_JS))); } catch (_) {}
+        try { logger.log("INFO", "  [диаг купона pinnacle]:", JSON.stringify(await sP.win.webContents.executeJavaScript(SLIP_DIAG_JS))); } catch (_) {}
+      }
+      await deselectLeg("betano", sB.selectedIndex);
+      await deselectLeg("pinnacle", sP.selectedIndex);
+    }
     return summary;
-  } catch (e) { logger.log("ERROR", "runOneBotCycle:", e); return { skipped: true, reason: e.message, pair: "?" }; }
+  } catch (e) {
+    logger.log("ERROR", "runOneBotCycle:", e);
+    botPulseState.error = e.message; sendBotPulse({ busy: false }); // ошибку — сразу в панель
+    return { skipped: true, reason: e.message, pair: "?" };
+  }
   finally { botBusy = false; }
 }
 
@@ -913,15 +1258,37 @@ async function tick() {
     else { status.lastError = "Telegram: " + res.error; logger.log("WARN", "Telegram send:", res.error); }
   }
 
-  // Режим ожидания бота: взведён и не занят → пробуем поймать НОВУЮ вилку и отработать цикл.
+  // Живой пульс в панель КАЖДЫЙ тик, пока взведён — видно, что бот жив (и «обрабатываю», пока busy).
+  if (botArmed) sendBotPulse();
+  // Режим ожидания бота: взведён и не занят → ловим НОВУЮ вилку и отрабатываем цикл.
   // Запускаем без await (цикл долгий) — botBusy не даёт перезапуститься на следующем тике.
-  // res: null → вилки нет, ждём; {skipped} → не смог, пропустили, ждём дальше; {ok} → успех → стоп.
+  // ТЕСТ-РЕЖИМ: НЕ останавливаемся на успехе, копим статистику и крутим до TEST_TARGET успехов, потом отчёт.
   if (botArmed && !botBusy) {
     runOneBotCycle(botArmLive).then((res) => {
       if (!res) return; // подходящей вилки нет — ждём дальше
+      if (res.waiting) { sendBotPulse(); return; } // нехватка баланса плеча — ОСТАЁМСЯ взведёнными, ждём пополнения
+      recordBotStat(res); // обновить счётчики сессии (успехи/скипы/хедж/экспозиция)
       if (panelWin && !panelWin.isDestroyed()) panelWin.webContents.send("bot", res);
-      if (res.ok) { botArmed = false; status.botArmed = false; pushStatus(); } // успех → разоружаемся
-      // res.skipped → остаёмся взведёнными, ищем следующую
+      sendBotPulse(); // обновить счётчики в панели сразу после цикла
+      // 🔴 АВТО-СТОП без участия владельца: незахеджированная ставка (Betano принят, Pinnacle нет)
+      if (res.hedge === "exposed") {
+        botArmed = false; status.botArmed = false;
+        botPulseState.error = "НЕЗАХЕДЖИРОВАНО — авто-стоп";
+        logger.log("ERROR", "🔴 [БОТ] АВТО-СТОП: незахеджированная ставка (одно плечо в игре). Разбирайся вручную!");
+        const report = formatBotStats(botStats);
+        logger.log("INFO", "[бот ИТОГ при авто-стопе]:\n" + report);
+        if (panelWin && !panelWin.isDestroyed()) { panelWin.webContents.send("bot-stats", report); }
+        sendBotPulse({ armed: false }); pushStatus();
+        return;
+      }
+      if (botStats && botStats.completed >= TEST_TARGET) { // собрали 10 успешных → стоп + отчёт
+        botArmed = false; status.botArmed = false;
+        const report = formatBotStats(botStats);
+        logger.log("INFO", "[бот ТЕСТ] ИТОГ:\n" + report);
+        if (panelWin && !panelWin.isDestroyed()) panelWin.webContents.send("bot-stats", report);
+        pushStatus();
+      }
+      // иначе (успех или скип) остаёмся взведёнными и ищем следующую вилку
     }).catch((e) => logger.log("ERROR", "bot cycle:", e));
   }
 
@@ -1023,6 +1390,13 @@ ipcMain.handle("randomize-fp", (_e, id) => {
   }
   return b ? b.fp : null;
 });
+// Сгенерировать НОВЫЙ User-Agent для конторы (по кнопке), не трогая остальной отпечаток.
+ipcMain.handle("randomize-ua", (_e, id) => {
+  const list = settings.bookers || [];
+  const b = list.find((x) => x.id === id);
+  if (b) { b.fp = b.fp || {}; b.fp.ua = randomUA(b.fp.ua); settings = settingsStore.save({ bookers: list }); }
+  return b && b.fp ? b.fp.ua : null;
+});
 ipcMain.handle("get-fx", async () => { await refreshFx(); return fxRate; });
 ipcMain.handle("capture-booker", async (_e, id) => await captureBooker(id));
 ipcMain.handle("dry-run-place", async (_e, id, stake) => await placeBet(id, stake, false));
@@ -1034,10 +1408,20 @@ ipcMain.handle("place-bet", async (_e, id, stake) => {
 // сам ловит вилку Betano + Pinnacle(Delayed), проходит оба плеча и в конце разоружается.
 // live=true разрешён только при тумблере БОЕВОЙ; иначе dry-run (без ставки).
 ipcMain.handle("run-bot", (_e, live) => {
-  if (botArmed) { botArmed = false; status.botArmed = false; pushStatus(); logger.log("INFO", "[бот] остановлен (снят с ожидания)"); return { armed: false }; }
+  if (botArmed) {
+    botArmed = false; status.botArmed = false; pushStatus();
+    // ручная остановка посреди теста → выложить промежуточный отчёт (что успели собрать)
+    if (botStats && botStats.attempts > 0) logger.log("INFO", "[бот ТЕСТ] остановлен вручную, промежуточный итог:\n" + formatBotStats(botStats));
+    logger.log("INFO", "[бот] остановлен (снят с ожидания)");
+    sendBotPulse({ armed: false }); // мгновенно обновить панель
+    return { armed: false };
+  }
   triedVilkas.clear(); // новый запуск — снова можно пробовать все вилки
+  botStats = newBotStats(); // сброс статистики теста
+  botPulseState = { records: 0, pairs: 0, fresh: 0, error: null };
   botArmed = true; botArmLive = !!live && !!settings.liveMode; status.botArmed = true; pushStatus();
-  logger.log("INFO", "[бот] взведён, жду вилку; режим:", botArmLive ? "БОЕВОЙ" : "dry-run");
+  sendBotPulse(); // мгновенно показать «взведён»
+  logger.log("INFO", "[бот] взведён, жду вилку; режим:", botArmLive ? "БОЕВОЙ" : "dry-run", "| тест до", TEST_TARGET, "успешных");
   return { armed: true, live: botArmLive };
 });
 

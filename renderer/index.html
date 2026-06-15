@@ -10,17 +10,18 @@
   <h1>Surebet&nbsp;Signal</h1>
 
   <section class="card" id="statusCard">
-    <div class="row"><span class="dot" id="dot"></span><b id="stateText">…</b></div>
-    <div class="muted" id="counts">вилок: 0 · Pinnacle: 0 · отправлено: 0</div>
-    <div class="muted" id="lastSignal"></div>
+    <div id="botPulse" style="margin:2px 0; font-size:14px;">бот: не запущен</div>
+    <div id="botCounters" style="margin:2px 0; font-size:13px;">сессия: всего 0 · хедж 0 · незахедж. 0 · пропущено 0</div>
     <div class="err" id="lastError"></div>
   </section>
 
   <section class="card">
-    <h2>Шаг 1. Вход в surebet</h2>
-    <p class="muted">Открой surebet, залогинься и выстави свой фильтр (Pinnacle, нужный порог дохода). Приложение следит ровно за тем, что видишь ты.</p>
-    <button id="openSurebet">Открыть surebet</button>
-    <button id="logout" class="ghost">Выйти из surebet</button>
+    <details>
+      <summary><b>Шаг 1. Вход в surebet</b></summary>
+      <p class="muted">Открой surebet, залогинься и выстави свой фильтр (Pinnacle, нужный порог дохода). Приложение следит ровно за тем, что видишь ты.</p>
+      <button id="openSurebet">Открыть surebet</button>
+      <button id="logout" class="ghost">Выйти из surebet</button>
+    </details>
   </section>
 
   <div class="muted hint" id="saveHint"></div>

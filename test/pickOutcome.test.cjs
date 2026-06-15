@@ -120,6 +120,91 @@ test("classifyDesc: распознаёт фору/тотал/победу/счё
   assert.strictEqual(classifyDesc("Devin Vassell - очки").kind, null);
 });
 
+// ── АНГЛ-нотация фида (после переключения на английский ради сверки имён #1) ──
+test("classifyDesc: английские форы/тоталы (AH/Over/Under) — сторона, знак линии, over/under", () => {
+  const ah1 = classifyDesc("AH1(+1.5)");
+  assert.strictEqual(ah1.kind, "hcap");
+  assert.strictEqual(ah1.side, "1");
+  assert.strictEqual(ah1.line, "+1.5");
+  const ah2 = classifyDesc("AH2(−1.5)"); // юникод-минус из фида
+  assert.strictEqual(ah2.kind, "hcap");
+  assert.strictEqual(ah2.side, "2");
+  assert.strictEqual(ah2.line, "-1.5");
+  const ov = classifyDesc("Over 7.5 OT"); // с суффиксом overtime
+  assert.strictEqual(ov.kind, "total");
+  assert.strictEqual(ov.over, true);
+  assert.strictEqual(ov.line, "7.5");
+  const un = classifyDesc("Under 220.5");
+  assert.strictEqual(un.kind, "total");
+  assert.strictEqual(un.over, false);
+  assert.strictEqual(un.line, "220.5");
+  // русская нотация по-прежнему работает (фид может вернуться)
+  assert.strictEqual(classifyDesc("Ф2(-2.5)").kind, "hcap");
+  assert.strictEqual(classifyDesc("Тб(7.5)").over, true);
+});
+
+test("англ-тотал «Over 7.5» → кнопка «Over 7.5 1.95» (не Under)", () => {
+  const buttons = [
+    { i: 0, id: "", text: "Over 7.5 1.95" },
+    { i: 1, id: "", text: "Under 7.5 1.85" },
+  ];
+  const r = pickOutcome({ desc: "Over 7.5", expectedOdds: 1.95, buttons });
+  assert.ok(r, "должен найти исход");
+  assert.strictEqual(r.i, 0);
+});
+
+test("англ-фора «AH1(+1.5)» → кнопка «+1.5 1.66» по знаку+линии", () => {
+  const buttons = [
+    { i: 0, id: "", text: "+1.5 1.66" },
+    { i: 1, id: "", text: "-1.5 2.20" },
+  ];
+  const r = pickOutcome({ desc: "AH1(+1.5)", expectedOdds: 1.66, buttons });
+  assert.ok(r, "должен найти исход");
+  assert.strictEqual(r.i, 0);
+});
+
+// ── ДВОЙНОЙ ШАНС / составные исходы (1X/X2/12) vs одиночная победа ────────────
+test("classifyDesc: 1X/X2/12 = двойной шанс (dc), а 1/2/X = одиночная победа", () => {
+  assert.strictEqual(classifyDesc("1X").kind, "dc");
+  assert.deepStrictEqual(classifyDesc("1X").sides, ["1", "X"]);
+  assert.deepStrictEqual(classifyDesc("X2").sides, ["X", "2"]);
+  assert.deepStrictEqual(classifyDesc("12").sides, ["1", "2"]);
+  assert.strictEqual(classifyDesc("1").kind, "win");
+  assert.strictEqual(classifyDesc("1").side, "1");
+  assert.strictEqual(classifyDesc("X").kind, "win");
+  assert.strictEqual(classifyDesc("X").side, "X");
+});
+
+// реальный кейс из лога: искали «1» (Vancouver FC), бот брал «Vancouver FC or Draw» (двойной шанс)
+const FOOTBALL = [
+  { i: 0, id: "", text: "Vancouver FC 2.35" },
+  { i: 1, id: "", text: "Draw 3.90" },
+  { i: 2, id: "", text: "Pacific FC 4.10" },
+  { i: 3, id: "", text: "Vancouver FC or Draw 1.42" },
+  { i: 4, id: "", text: "Draw or Pacific FC 1.63" },
+  { i: 5, id: "", text: "Vancouver FC or Pacific FC 1.19" },
+];
+const FURL = "https://www.betano.pt/odds/vancouver-fc-pacific-fc/87075448/";
+
+test("одиночная победа «1» → чистая «Vancouver FC 2.35», НЕ составная «… or …»", () => {
+  const r = pickOutcome({ desc: "1", expectedOdds: 2.35, subject: "Vancouver FC", eventUrl: FURL, buttons: FOOTBALL });
+  assert.ok(r, "должен найти исход");
+  assert.strictEqual(r.i, 0);
+});
+
+test("двойной шанс «X2» → «Draw or Pacific FC» (ничья или гость)", () => {
+  const r = pickOutcome({ desc: "X2", expectedOdds: 1.63, eventUrl: FURL, buttons: FOOTBALL });
+  assert.ok(r, "должен найти исход");
+  assert.strictEqual(r.i, 4);
+});
+
+test("двойной шанс «1X» → «Vancouver FC or Draw»; «12» → «Vancouver FC or Pacific FC»", () => {
+  const r1 = pickOutcome({ desc: "1X", expectedOdds: 1.42, eventUrl: FURL, buttons: FOOTBALL });
+  assert.ok(r1); assert.strictEqual(r1.i, 3);
+  const r12 = pickOutcome({ desc: "12", expectedOdds: 1.19, eventUrl: FURL, buttons: FOOTBALL });
+  assert.ok(r12); assert.strictEqual(r12.i, 5);
+});
+
 // ── ТОЧНЫЙ СЧЁТ (теннис): «2:0» → кнопка «2 - 0», не победа ──────────────────
 test("счёт 2:0 @3.55 → «2 - 0 3.60» (НЕ победа Shimabukuro 2.10)", () => {
   const r = pickOutcome({ desc: "2:0", expectedOdds: 3.55, buttons: BET });

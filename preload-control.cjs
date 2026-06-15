@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("api", {
   saveBookers: (list) => ipcRenderer.invoke("save-bookers", list),
   openBooker: (id) => ipcRenderer.invoke("open-booker", id),
   randomizeFp: (id) => ipcRenderer.invoke("randomize-fp", id),
+  randomizeUa: (id) => ipcRenderer.invoke("randomize-ua", id),
   resetBookerData: (id) => ipcRenderer.invoke("reset-booker-data", id),
   captureBooker: (id) => ipcRenderer.invoke("capture-booker", id),
   dryRunPlace: (id, stake) => ipcRenderer.invoke("dry-run-place", id, stake),
@@ -22,4 +23,6 @@ contextBridge.exposeInMainWorld("api", {
   onStatus: (cb) => ipcRenderer.on("status", (_e, s) => cb(s)),
   onFx: (cb) => ipcRenderer.on("fx", (_e, r) => cb(r)),
   onBot: (cb) => ipcRenderer.on("bot", (_e, r) => cb(r)),
+  onBotStats: (cb) => ipcRenderer.on("bot-stats", (_e, r) => cb(r)),
+  onBotPulse: (cb) => ipcRenderer.on("bot-pulse", (_e, p) => cb(p)),
 });

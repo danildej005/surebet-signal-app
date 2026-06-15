@@ -3,24 +3,25 @@ const $ = (id) => document.getElementById(id);
 
 function renderStatus(s) {
   if (!s) return;
+  const setText = (id, t) => { const e = $(id); if (e) e.textContent = t; }; // верхние элементы могли быть убраны
   const dot = $("dot");
-  dot.className = "dot " + (s.loggedOut ? "warn" : s.running ? "on" : "pause");
-  $("stateText").textContent = s.loggedOut
-    ? "Нужен вход в surebet"
-    : s.running ? "Слежу за вилками" : "Пауза";
-  $("counts").textContent = `вилок: ${s.total} · Pinnacle: ${s.pinnacle} · отправлено: ${s.sent}`;
-  $("lastSignal").textContent = s.lastSignal
-    ? `последний сигнал: ${s.lastSignal.event} (${s.lastSignal.profit}%)`
-    : "";
-  $("lastError").textContent = s.lastError ? "⚠️ " + s.lastError : "";
+  if (dot) dot.className = "dot " + (s.loggedOut ? "warn" : s.running ? "on" : "pause");
+  setText("stateText", s.loggedOut ? "Нужен вход в surebet" : s.running ? "Слежу за вилками" : "Пауза");
+  setText("counts", `вилок: ${s.total} · Pinnacle: ${s.pinnacle} · отправлено: ${s.sent}`);
+  setText("lastSignal", s.lastSignal ? `последний сигнал: ${s.lastSignal.event} (${s.lastSignal.profit}%)` : "");
+  setText("lastError", s.loggedOut ? "⚠️ Нужен вход в surebet — бот не работает" : (s.lastError ? "⚠️ " + s.lastError : ""));
   if (s.settings && typeof s.settings.liveMode === "boolean" && document.activeElement !== $("liveMode")) {
     $("liveMode").checked = s.settings.liveMode;
   }
   if (typeof s.botArmed === "boolean" && s.botArmed !== botArmedUi) setBotBtn(s.botArmed);
-  if (s.settings && s.settings.vilkaLimitEur != null && document.activeElement !== $("vilkaLimit") && !$("vilkaLimit").value) {
-    if (s.settings.vilkaLimitEur > 0) $("vilkaLimit").value = s.settings.vilkaLimitEur;
+  // Лимит вилки: заполняем поле ОДИН раз при загрузке. Дальше НЕ трогаем — иначе очистка/новое
+  // значение затирались сохранённым на каждом тике (бот «застревал» на старом лимите 5€).
+  if (!vilkaLimitInit && s.settings && s.settings.vilkaLimitEur != null) {
+    vilkaLimitInit = true;
+    if (s.settings.vilkaLimitEur > 0 && document.activeElement !== $("vilkaLimit")) $("vilkaLimit").value = s.settings.vilkaLimitEur;
   }
 }
+let vilkaLimitInit = false; // лимит вилки в поле инициализирован (заполняем только раз)
 let botArmedUi = false;
 function setBotBtn(armed) {
   botArmedUi = armed;
@@ -74,12 +75,48 @@ $("runBot").onclick = async () => {
 };
 // результат цикла приходит push-ом: пропуск (ищем дальше, остаёмся в ожидании) или успех (стоп)
 if (window.api.onBot) window.api.onBot((res) => {
+  // ТЕСТ-РЕЖИМ: и скип, и успех — остаёмся взведёнными (бот крутит до 10 успехов, потом отчёт)
   if (res && res.skipped) {
     $("botResult").textContent = "⏭ пропустил «" + (res.pair || "?") + "» (" + (res.reason || "не умею") + ") — ищу дальше…";
-    setBotBtn(true); // остаёмся взведёнными
   } else {
-    $("botResult").textContent = fmtBot(res);
-    setBotBtn(false); // успех → стоп
+    $("botResult").textContent = fmtBot(res) + "\n…тест продолжается, ищу следующую вилку";
+  }
+  setBotBtn(true);
+});
+if (window.api.onBotStats) window.api.onBotStats((report) => {
+  const el = $("botResult");
+  el.style.whiteSpace = "pre-wrap";
+  el.textContent = report;            // развёрнутый отчёт по тесту
+  setBotBtn(false);                   // тест завершён → бот разоружён
+});
+// ЖИВОЙ ПУЛЬС: обновляется каждый тик — видно, что бот жив / ждёт / обрабатывает / упал в ошибку
+if (window.api.onBotPulse) window.api.onBotPulse((p) => {
+  const el = $("botPulse");
+  if (!el || !p) return;
+  const t = new Date(p.at || Date.now()).toLocaleTimeString();
+  let s, color;
+  if (p.armed === false) {
+    color = "#7f8c8d"; s = "⏹ остановлен";
+  } else if (p.error) {
+    color = "#c0392b"; s = "🔴 ОШИБКА: " + p.error;
+  } else if (p.wait) {
+    color = "#e67e22"; s = "⏸ жду пополнения баланса: " + p.wait; // плечо не покрывается — ждём, не выключаемся
+  } else if (p.busy) {
+    color = "#2980b9"; s = "⚙️ обрабатываю вилку… · успехов " + (p.success || 0) + "/" + (p.target || "?") + " · пробовано " + (p.tried || 0);
+  } else {
+    color = "#27ae60"; s = "🟢 жив, жду вилку · в фиде " + (p.records || 0) + ", годных пар " + (p.pairs || 0) + ", новых " + (p.fresh || 0) +
+      " · успехов " + (p.success || 0) + "/" + (p.target || "?") + " · пробовано " + (p.tried || 0);
+  }
+  el.style.color = color;
+  el.textContent = "бот " + t + ": " + s;
+  // счётчики сессии
+  const cnt = $("botCounters");
+  if (cnt) {
+    const exposed = p.exposed || 0;
+    cnt.textContent = "сессия: всего " + (p.total || 0) + " · ✅ хедж " + (p.hedged || 0) +
+      " · 🔴 незахедж. " + exposed + " · ⏭ пропущено " + (p.skipped || 0);
+    cnt.style.color = exposed > 0 ? "#c0392b" : "#333";
+    cnt.style.fontWeight = exposed > 0 ? "700" : "400";
   }
 });
 
@@ -156,9 +193,17 @@ async function renderBookers() {
     b.proxy = b.proxy || { protocol: "", host: "", port: "", user: "", pass: "" };
     b.login = b.login || { user: "", pass: "" };
 
-    const head = el("div", { className: "row" }, [
-      el("b", { textContent: b.name || b.id }),
-      el("button", { textContent: "Войти", onclick: async () => { await window.api.saveBookers(bookersCache); await window.api.openBooker(b.id); } }),
+    const enterBtn = el("button", { textContent: "Войти", onclick: async () => { await window.api.saveBookers(bookersCache); await window.api.openBooker(b.id); } });
+
+    // Панель User-Agent: показ текущего + кнопка сгенерировать новый (не трогая остальной отпечаток)
+    const uaText = el("div", { style: "font-size:12px; word-break:break-all; margin:4px 0;", textContent: "UA: " + (b.fp.ua || "—") });
+    const uaRow = el("div", { className: "subbox" }, [
+      el("div", { className: "muted", textContent: "User-Agent" }),
+      uaText,
+      el("button", { className: "ghost", textContent: "🎲 новый UA", onclick: async () => {
+        const ua = await window.api.randomizeUa(b.id);
+        if (ua) { b.fp.ua = ua; uaText.textContent = "UA: " + ua; }
+      } }),
     ]);
 
     // Прокси (структурно)
@@ -231,8 +276,10 @@ async function renderBookers() {
       dryResult,
     ]);
 
-    const card = el("div", { className: "booker" }, [
-      head,
+    const card = el("details", { className: "booker" }, [
+      el("summary", {}, [el("b", { textContent: b.name || b.id })]),
+      enterBtn,
+      uaRow,
       field("Адрес для входа (главная конторы)", b.url || "", (v) => (b.url = v)),
       proxyBox,
       loginBox,
