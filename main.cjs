@@ -121,7 +121,11 @@ const proxyBridges = new Map(); // строка прокси → { url, close } 
 
 async function applySessionProxy(ses, proxyStr) {
   const p = parseProxy(proxyStr);
-  if (!p || !p.host || !p.port) { ses.__creds = null; try { await ses.setProxy({ mode: "direct" }); } catch { /* ignore */ } return; }
+  if (!p || !p.host || !p.port) {
+    ses.__creds = null; try { await ses.setProxy({ mode: "direct" }); } catch { /* ignore */ }
+    logger.log("WARN", "  applySessionProxy: прокси ПУСТОЙ/неполный (строка:", JSON.stringify(proxyStr || ""), ") → direct = РЕАЛЬНЫЙ IP. Проверь поля прокси конторы + «Сохранить».");
+    return;
+  }
 
   const isSocks = p.scheme === "socks5" || p.scheme === "socks";
   // Авторизованный SOCKS5 → поднимаем локальный мост (Chromium сам авторизацию SOCKS5 не умеет).
@@ -140,8 +144,10 @@ async function applySessionProxy(ses, proxyStr) {
 
   // Обычный путь: SOCKS5 без авторизации, либо HTTP(S) (авторизация — через событие login).
   ses.__creds = (p.user || p.pass) ? { user: p.user, pass: p.pass } : null;
-  try { await ses.setProxy({ proxyRules: `${p.scheme}://${p.host}:${p.port}` }); }
-  catch (e) { logger.log("WARN", "booker setProxy:", e); }
+  try {
+    await ses.setProxy({ proxyRules: `${p.scheme}://${p.host}:${p.port}` });
+    logger.log("INFO", "  applySessionProxy: setProxy", p.scheme + "://" + p.host + ":" + p.port, p.user ? "(+ авторизация через login-событие)" : "");
+  } catch (e) { logger.log("WARN", "booker setProxy:", e); }
 }
 
 async function openBookerProfile(profile, overrideUrl) {
@@ -150,7 +156,8 @@ async function openBookerProfile(profile, overrideUrl) {
   const id = profile.id;
   const partition = "persist:booker-" + id;
   const ses = session.fromPartition(partition);
-  await applySessionProxy(ses, buildProxyString(profile.proxy));
+  const pxStr = buildProxyString(profile.proxy);
+  await applySessionProxy(ses, pxStr);
 
   if (!ses.__hooked) {
     ses.__hooked = true;
@@ -214,7 +221,8 @@ async function openBookerProfile(profile, overrideUrl) {
       if (fp.locale) await dbg.sendCommand("Emulation.setLocaleOverride", { locale: fp.locale }).catch(() => {});
       if (fp.lat != null && fp.lon != null) await dbg.sendCommand("Emulation.setGeolocationOverride", { latitude: Number(fp.lat), longitude: Number(fp.lon), accuracy: 50 }).catch(() => {});
       await dbg.sendCommand("Page.addScriptToEvaluateOnNewDocument", { source: buildFingerprintScript(fp) });
-      logger.log("INFO", "контора открыта:", id, "прокси:", profile.proxy ? "да" : "нет", "tz:", fp.timezone);
+      const pxInfo = parseProxy(pxStr);
+      logger.log("INFO", "контора открыта:", id, "прокси:", (pxInfo && pxInfo.host) ? (pxInfo.scheme + "://" + pxInfo.host + ":" + pxInfo.port) : "НЕТ — реальный IP ВДС!", "tz:", fp.timezone);
     } catch (e) { logger.log("WARN", "booker CDP:", e); }
   }
 
