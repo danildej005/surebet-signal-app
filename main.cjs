@@ -272,25 +272,33 @@ function resolveEventViaNav(navUrl, booker, timeoutMs = 15000) {
     } catch (e) { logger.log("WARN", "navWin:", e); return resolve(null); }
     const wc = navWin.webContents;
     const re = bookerDomainRe(booker);
-    let best = null, done = false, settle = null;
+    let best = null, done = false;
     const finish = () => {
       if (done) return; done = true;
-      clearTimeout(settle);
       try { if (!navWin.isDestroyed()) navWin.destroy(); } catch { /* ignore */ }
       resolve(best);
     };
-    const onNav = (url) => {
-      if (url && re.test(url) && !/surebet\.com/i.test(url)) {
-        best = url;                          // дошли до конторы
-        clearTimeout(settle);
-        settle = setTimeout(finish, 3000);   // подождать JS-редирект к самому событию
-      }
+    // КРИТИЧНО (утечка реального IP): резолв идёт на surebet-СЕССИИ (persist:surebet — без прокси конторы).
+    // Раньше окно по surebet-редиректу физически уходило на сайт конторы РЕАЛЬНЫМ IP ВДС → Betano видел
+    // немецкий IP и отдавал /myaccount/ban/country (геобан). Теперь: как только редирект/навигация ведёт
+    // на домен конторы — ПЕРЕХВАТЫВАЕМ ссылку и ОБРЫВАЕМ (preventDefault), не давая surebet-сессии
+    // достучаться до конторы. Чистую deep-ссылку грузим уже в ОКНЕ КОНТОРЫ (с её прокси) — там же betano.pt.
+    const grab = (event, url) => {
+      if (best || !url || /surebet\.com/i.test(url) || !re.test(url)) return;
+      best = url;
+      try { if (event && event.preventDefault) event.preventDefault(); } catch { /* ignore */ }
+      logger.log("INFO", "  резолв: перехватил ссылку конторы на surebet-сессии, обрываю (без утечки IP):", url.slice(0, 90));
+      finish();
     };
-    wc.on("did-redirect-navigation", (_e, url) => onNav(url));
-    wc.on("did-navigate", (_e, url) => onNav(url));
-    wc.on("did-navigate-in-page", (_e, url) => onNav(url));
+    wc.on("will-redirect", grab);              // серверный 302 surebet→контора — ловим ДО захода
+    wc.on("will-navigate", grab);              // JS window.location → контора — тоже ловим ДО захода
+    // Фолбэк: если контора пришла без will-* (редкая JS-навигация) — берём первый booker-URL.
+    const onDid = (_e, url) => grab(null, url);
+    wc.on("did-redirect-navigation", onDid);
+    wc.on("did-navigate", onDid);
+    wc.on("did-navigate-in-page", onDid);
     wc.loadURL(navUrl).catch(() => {});
-    setTimeout(finish, timeoutMs);           // жёсткий таймаут
+    setTimeout(finish, timeoutMs);             // жёсткий таймаут
   });
 }
 
