@@ -119,6 +119,29 @@ function createPanelWindow() {
 // ── антидетект-окно конторы (профиль: сессия + прокси + отпечаток + гео) ───────
 const proxyBridges = new Map(); // строка прокси → { url, close } (мост для авторизованного SOCKS5)
 
+// GET JSON через КОНКРЕТНУЮ сессию (с её прокси). creds — для HTTP-прокси-авторизации (407 → login).
+function fetchJsonVia(url, ses, creds, timeoutMs = 9000) {
+  return new Promise((resolve) => {
+    let done = false; const fin = (v) => { if (!done) { done = true; resolve(v); } };
+    try {
+      const req = net.request({ url, session: ses });
+      req.on("login", (_authInfo, cb) => { if (creds && creds.user) cb(creds.user, creds.pass); else cb(); });
+      req.on("response", (res) => { let d = ""; res.on("data", (c) => (d += c)); res.on("end", () => { try { fin(JSON.parse(d)); } catch { fin({ error: "bad-json" }); } }); });
+      req.on("error", (e) => fin({ error: e.message }));
+      setTimeout(() => fin({ error: "timeout" }), timeoutMs);
+      req.end();
+    } catch (e) { fin({ error: e.message }); }
+  });
+}
+// IP+страна через сессию: ipinfo.io, фолбэк ipify (на случай блокировки/лимита).
+async function ipViaSession(ses, creds) {
+  const r = await fetchJsonVia("https://ipinfo.io/json", ses, creds);
+  if (r && r.ip) return { ip: r.ip, country: r.country || null };
+  const r2 = await fetchJsonVia("https://api.ipify.org?format=json", ses, creds);
+  if (r2 && r2.ip) return { ip: r2.ip, country: null };
+  return { ip: null, error: (r && r.error) || (r2 && r2.error) || "нет ответа" };
+}
+
 async function applySessionProxy(ses, proxyStr) {
   const p = parseProxy(proxyStr);
   if (!p || !p.host || !p.port) {
@@ -1404,6 +1427,27 @@ ipcMain.handle("randomize-ua", (_e, id) => {
   const b = list.find((x) => x.id === id);
   if (b) { b.fp = b.fp || {}; b.fp.ua = randomUA(b.fp.ua); settings = settingsStore.save({ bookers: list }); }
   return b && b.fp ? b.fp.ua : null;
+});
+// Проверка прокси конторы: IP через её сессию (с прокси) vs реальный IP ВДС → работает ли прокси.
+ipcMain.handle("check-proxy", async (_e, id) => {
+  const b = (settings.bookers || []).find((x) => x.id === id);
+  if (!b) return { error: "контора не найдена" };
+  const pxStr = buildProxyString(b.proxy);
+  const px = parseProxy(pxStr);
+  const configured = !!(px && px.host && px.port);
+  const ses = session.fromPartition("persist:booker-" + id);
+  await applySessionProxy(ses, pxStr); // применить текущий прокси к сессии перед проверкой
+  const proxied = await ipViaSession(ses, ses.__creds);
+  const direct = await ipViaSession(session.defaultSession, null);
+  const viaProxy = !!(configured && proxied.ip && direct.ip && proxied.ip !== direct.ip);
+  logger.log("INFO", "проверка прокси", id, ":", configured ? (px.scheme + "://" + px.host + ":" + px.port) : "НЕ задан",
+    "| через сессию:", proxied.ip ? (proxied.ip + (proxied.country ? " (" + proxied.country + ")" : "")) : ("ошибка " + proxied.error),
+    "| реальный ВДС:", direct.ip || "?", "| прокси работает:", viaProxy);
+  return {
+    configured, proxyLabel: configured ? (px.scheme + "://" + px.host + ":" + px.port) : "",
+    proxyIp: proxied.ip || null, proxyCountry: proxied.country || null, proxyError: proxied.error || null,
+    realIp: direct.ip || null, realCountry: direct.country || null, viaProxy,
+  };
 });
 ipcMain.handle("get-fx", async () => { await refreshFx(); return fxRate; });
 ipcMain.handle("capture-booker", async (_e, id) => await captureBooker(id));

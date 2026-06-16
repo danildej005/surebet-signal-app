@@ -206,7 +206,20 @@ async function renderBookers() {
       } }),
     ]);
 
-    // Прокси (структурно)
+    // Прокси (структурно) + индикатор «работает ли прокси»
+    const proxyStatus = el("div", { style: "font-size:12px; margin-top:4px;", textContent: "прокси: не проверен" });
+    const checkProxyBtn = el("button", { className: "ghost", textContent: "🌐 Проверить прокси", onclick: async () => {
+      await window.api.saveBookers(bookersCache); // сначала сохранить поля, чтобы проверять актуальное
+      proxyStatus.textContent = "прокси: проверяю…"; proxyStatus.style.color = "#555";
+      try {
+        const r = await window.api.checkProxy(b.id);
+        if (!r || r.error) { proxyStatus.textContent = "прокси: ⚠️ " + ((r && r.error) || "ошибка"); proxyStatus.style.color = "#c0392b"; return; }
+        if (!r.configured) { proxyStatus.textContent = "прокси: ⚪ НЕ задан — идёт реальный IP ВДС " + (r.realIp || "?") + (r.realCountry ? " (" + r.realCountry + ")" : ""); proxyStatus.style.color = "#7f8c8d"; }
+        else if (r.viaProxy) { proxyStatus.textContent = "прокси: ✅ работает · " + r.proxyIp + (r.proxyCountry ? " (" + r.proxyCountry + ")" : ""); proxyStatus.style.color = "#1a9e4b"; }
+        else if (!r.proxyIp || r.proxyError) { proxyStatus.textContent = "прокси: 🔴 НЕ отвечает (" + (r.proxyError || "нет ответа") + ") — мёртв / вайтлист / неверный тип"; proxyStatus.style.color = "#c0392b"; }
+        else { proxyStatus.textContent = "прокси: 🔴 НЕ применяется — идёт напрямую, реальный IP " + r.realIp + (r.realCountry ? " (" + r.realCountry + ")" : ""); proxyStatus.style.color = "#c0392b"; }
+      } catch (e) { proxyStatus.textContent = "прокси: ⚠️ " + e.message; proxyStatus.style.color = "#c0392b"; }
+    } });
     const proxyBox = el("div", { className: "subbox" }, [
       el("div", { className: "muted", textContent: "Прокси конторы" }),
       selectField("Протокол", b.proxy.protocol || "", [["", "нет прокси"], ["http", "HTTP"], ["https", "HTTPS"], ["socks5", "SOCKS5"]], (v) => (b.proxy.protocol = v)),
@@ -218,6 +231,8 @@ async function renderBookers() {
         field("Логин прокси", b.proxy.user || "", (v) => (b.proxy.user = v)),
         field("Пароль прокси", b.proxy.pass || "", (v) => (b.proxy.pass = v)),
       ]),
+      el("div", { className: "row" }, [checkProxyBtn]),
+      proxyStatus,
     ]);
 
     // Аккаунт конторы (для будущего автологина)

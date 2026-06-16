@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("api", {
   openBooker: (id) => ipcRenderer.invoke("open-booker", id),
   randomizeFp: (id) => ipcRenderer.invoke("randomize-fp", id),
   randomizeUa: (id) => ipcRenderer.invoke("randomize-ua", id),
+  checkProxy: (id) => ipcRenderer.invoke("check-proxy", id),
   resetBookerData: (id) => ipcRenderer.invoke("reset-booker-data", id),
   captureBooker: (id) => ipcRenderer.invoke("capture-booker", id),
   dryRunPlace: (id, stake) => ipcRenderer.invoke("dry-run-place", id, stake),
