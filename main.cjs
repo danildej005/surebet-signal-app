@@ -1349,9 +1349,58 @@ async function tick() {
   pushStatus();
 }
 
+// Анти-разлогин конторы: по бездействию Betano (и др.) выкидывает сессию (> ~1 мин). Раз в ~45с (заведомо
+// < 1 мин), для каждого ФОНОВОГО окна конторы (юзер в нём не работает) и когда бот не занят простановкой:
+// 1) ДОВЕРЕННЫЙ клик по «Deposit» через CDP (синтетический JS-эвент idle-таймеры игнорируют как
+//    isTrusted=false; CDP Input.* даёт настоящее браузерное событие + серверное взаимодействие);
+// 2) обновляем страницу (серверный запрос освежает сессию + возвращает чистое состояние).
+let keepAliveTimer = null;
+let keepAliveRunning = false;
+async function keepBookersAlive() {
+  if (keepAliveRunning || botBusy) return;
+  keepAliveRunning = true;
+  try {
+    for (const [id, win] of bookerWins) {
+      if (botBusy) break;
+      if (!win || win.isDestroyed()) continue;
+      let focused = false; try { focused = win.isFocused(); } catch { /* ignore */ }
+      if (focused) continue; // юзер сам работает в окне — не дёргаем под ним
+      const dbg = win.webContents.debugger;
+      const attached = !!(dbg && dbg.isAttached && dbg.isAttached());
+      const before = (() => { try { return win.webContents.getURL(); } catch { return ""; } })();
+      // 1) Найти кнопку «Deposit» и кликнуть по её центру доверенно (CDP). Если нет — просто движение.
+      let pt = null;
+      try {
+        pt = await win.webContents.executeJavaScript(`(() => {
+          const el = [...document.querySelectorAll('a,button,[role=button]')].find((e) => /deposit|депозит|cashier|каса|внасян/i.test(e.innerText || "") && e.offsetParent !== null);
+          if (!el) return null; const r = el.getBoundingClientRect();
+          if (r.width < 2 || r.height < 2) return null;
+          return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+        })()`);
+      } catch { pt = null; }
+      if (attached && pt && pt.x > 0 && pt.y > 0) {
+        await dbg.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", x: pt.x, y: pt.y, button: "left", buttons: 1, clickCount: 1 }).catch(() => {});
+        await dbg.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", x: pt.x, y: pt.y, button: "left", buttons: 0, clickCount: 1 }).catch(() => {});
+      } else if (attached) {
+        const x = 6 + Math.floor(Math.random() * 14), y = 6 + Math.floor(Math.random() * 14);
+        await dbg.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }).catch(() => {});
+      }
+      // 2) Обновить ту же страницу (а не «Депозит»): возвращаемся на before-URL → серверный запрос + чистое состояние.
+      await sleep(1200);
+      if (botBusy || win.isDestroyed()) continue;
+      const b = findBooker(id);
+      const target = (before && /^https?:/i.test(before)) ? before : (b && b.url) || null;
+      try { if (target) await win.loadURL(target); else win.webContents.reload(); } catch { /* ignore */ }
+      logger.log("INFO", "анти-разлогин:", id, pt ? "клик по депозиту + обновление" : "активность + обновление");
+    }
+  } catch { /* ignore */ } finally { keepAliveRunning = false; }
+}
+
 function startLoop() {
   if (timer) clearInterval(timer);
   timer = setInterval(() => { tick().catch((e) => { status.lastError = e.message; logger.log("ERROR", "tick:", e); }); }, Math.max(3000, settings.pollMs || 8000));
+  if (keepAliveTimer) clearInterval(keepAliveTimer);
+  keepAliveTimer = setInterval(() => { keepBookersAlive().catch(() => {}); }, 45000);
 }
 
 // ── авто-обновление ───────────────────────────────────────────────────────────
