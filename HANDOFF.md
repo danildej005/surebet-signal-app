@@ -4,7 +4,12 @@
 > сжатия контекста. Секретов тут НЕТ (токен/прокси-пароли хранятся в приложении шифрованно).
 
 Репозиторий: **github.com/danildej005/surebet-signal-app** (публичный).
-Текущая версия: **0.7.40**. Релизы — вручную с Mac → GitHub Releases.
+Текущая версия: **0.7.41**. Релизы — вручную с Mac → GitHub Releases.
+
+**0.7.41 — АНТИДЕТЕКТ Phase 1 (против Cloudflare-антифрода Betano):** Client Hints из UA
+(`uaMetadata` → CDP `userAgentMetadata`, теперь `Sec-CH-UA`/`navigator.userAgentData` совпадают с UA),
+`window.chrome` + `navigator.plugins`/`mimeTypes` (PDF) + `permissions.query(notifications)` в
+`buildFingerprintScript`, `accept-language` с q-весами. Тесты 74/74. Подробности — блок ниже.
 
 > 🟢 **0.7.40 ПОДТВЕРЖДЁН В БОЮ:** в логе `резолв: перехватил ссылку конторы …, обрываю (без утечки IP)`
 > → deep-ссылка открылась на реальное событие, НЕ на `/myaccount/ban/country`. Утечка реального IP закрыта.
@@ -16,7 +21,7 @@
 > Сторонний антидетект (ADS Power) у владельца проходит. **РЕШЕНИЕ ВЛАДЕЛЬЦА: усиливать СВОЙ антидетект**
 > (не интеграция ADS Power, не полу-ручной режим).
 >
-> 🔧 **Phase 1 антидетекта — СДЕЛАНО, НЕ СОБРАНО (жду «собирай», будет 0.7.41):**
+> 🔧 **Phase 1 антидетекта — РЕЛИЗ 0.7.41 (проверяет владелец: проходит ли простановка Betano / ушёл ли Turnstile):**
 > 1) **Client Hints из UA** — `uaMetadata(ua, platformVersion)` в `lib/bookers.cjs`, передаётся в CDP
 >    `Network.setUserAgentOverride` → `userAgentMetadata`. Раньше UA=Chrome/131, а Sec-CH-UA/`navigator.userAgentData`
 >    палили Electron → мгновенный детект. Теперь согласованы.
