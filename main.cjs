@@ -12,7 +12,7 @@ const { formatSignal } = require("./lib/format.cjs");
 const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
-const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, randomUA, buildFingerprintScript, uaMetadata, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
+const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, randomUA, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 const fx = require("./lib/fx.cjs");
 const { parseMoney, vilkaStakes } = require("./lib/vilka.cjs");
@@ -239,11 +239,7 @@ async function openBookerProfile(profile, overrideUrl) {
       dbg.attach("1.3");
       await dbg.sendCommand("Page.enable");
       await dbg.sendCommand("Network.enable");
-      // acceptLanguage с q-весами как у настоящего Chrome (pt-PT,pt;q=0.9,en;q=0.8), а не плоский список.
-      const fpLangs = fp.languages || ["en-US", "en"];
-      const acceptLanguage = fpLangs.map((l, i) => (i === 0 ? l : l + ";q=" + Math.max(0.1, 1 - i * 0.1).toFixed(1))).join(",");
-      // userAgentMetadata = Client Hints, согласованные с UA (иначе Sec-CH-UA палят Electron → детект Cloudflare).
-      await dbg.sendCommand("Network.setUserAgentOverride", { userAgent: fp.ua || "", acceptLanguage, platform: fp.platform || "Win32", userAgentMetadata: uaMetadata(fp.ua, fp.platformVersion) });
+      await dbg.sendCommand("Network.setUserAgentOverride", { userAgent: fp.ua || "", acceptLanguage: (fp.languages || ["en-US"]).join(","), platform: fp.platform || "Win32" });
       if (fp.timezone) await dbg.sendCommand("Emulation.setTimezoneOverride", { timezoneId: fp.timezone }).catch(() => {});
       if (fp.locale) await dbg.sendCommand("Emulation.setLocaleOverride", { locale: fp.locale }).catch(() => {});
       if (fp.lat != null && fp.lon != null) await dbg.sendCommand("Emulation.setGeolocationOverride", { latitude: Number(fp.lat), longitude: Number(fp.lon), accuracy: 50 }).catch(() => {});

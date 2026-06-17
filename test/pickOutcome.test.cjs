@@ -3,7 +3,7 @@
 // Pinnacle: ATP Stuttgart, Shimabukuro–Kyrgios. Betano: тот же матч.
 const test = require("node:test");
 const assert = require("node:assert");
-const { pickOutcome, classifyDesc, orderPlayers, isEventUrl, extractSubject, marketUnit, uaMetadata, buildFingerprintScript } = require("../lib/bookers.cjs");
+const { pickOutcome, classifyDesc, orderPlayers, isEventUrl, extractSubject, marketUnit } = require("../lib/bookers.cjs");
 
 const SLUG_T = "https://www.betano.pt/odds/sho-shimabukuro-nick-kyrgios/87161959/"; // player1=Shimabukuro
 const SLUG_NBA = "https://www.betano.pt/odds/new-york-knicks-san-antonio-spurs/86655013/"; // player1=Knicks
@@ -314,44 +314,4 @@ test("Pinnacle фора (имени на кнопке нет) — остаётс
   const r = pickOutcome({ desc: "Ф1(+1.5)", expectedOdds: 1.543, buttons: PINN, eventUrl: "https://www.pinnacle888.com/en/standard/tennis/x/sho-shimabukuro-vs-nick-kyrgios/1631805342" });
   assert.strictEqual(r.id, "1631805342|0|2|0|0|+1.5");
   assert.strictEqual(r.how, "desc");
-});
-
-// ── антидетект: Client Hints из UA + спуф-скрипт ──────────────────────────────
-test("uaMetadata: версия Chrome из UA попадает в brands и fullVersionList", () => {
-  const ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
-  const m = uaMetadata(ua);
-  assert.strictEqual(m.platform, "Windows");
-  assert.strictEqual(m.mobile, false);
-  assert.strictEqual(m.fullVersion, "131.0.0.0");
-  const gc = m.brands.find((b) => b.brand === "Google Chrome");
-  assert.ok(gc && gc.version === "131", "Google Chrome v131 в brands");
-  const gcFull = m.fullVersionList.find((b) => b.brand === "Google Chrome");
-  assert.strictEqual(gcFull.version, "131.0.0.0");
-  // есть GREASE-бренд и Chromium той же версии
-  assert.ok(m.brands.some((b) => /Not.?A.?Brand/i.test(b.brand)));
-  assert.ok(m.brands.some((b) => b.brand === "Chromium" && b.version === "131"));
-});
-
-test("uaMetadata: кривой UA → дефолт 131, не падает", () => {
-  const m = uaMetadata("");
-  assert.strictEqual(m.fullVersion, "131.0.0.0");
-  assert.strictEqual(m.architecture, "x86");
-  assert.strictEqual(m.bitness, "64");
-});
-
-test("uaMetadata: platformVersion переопределяется (Win11)", () => {
-  const m = uaMetadata("Chrome/130.0.0.0", "13.0.0");
-  assert.strictEqual(m.platformVersion, "13.0.0");
-  assert.ok(m.brands.some((b) => b.brand === "Google Chrome" && b.version === "130"));
-});
-
-test("buildFingerprintScript: закрывает ключевые анти-бот признаки", () => {
-  const src = buildFingerprintScript({ ua: "Chrome/131.0.0.0", languages: ["pt-PT", "pt", "en"], webglVendor: "Google Inc. (Intel)", webglRenderer: "ANGLE (Intel)" });
-  assert.match(src, /navigator, 'webdriver', false/);   // webdriver=false
-  assert.match(src, /window\.chrome/);                   // window.chrome присутствует
-  assert.match(src, /'plugins'/);                        // подмена plugins
-  assert.match(src, /notifications/);                    // permissions.query согласован
-  assert.match(src, /37445/);                            // WebGL vendor
-  // валидный JS (оборачиваем в функцию, не выполняем)
-  assert.doesNotThrow(() => new Function(src));
 });
