@@ -4,16 +4,17 @@
 > сжатия контекста. Секретов тут НЕТ (токен/прокси-пароли хранятся в приложении шифрованно).
 
 Репозиторий: **github.com/danildej005/surebet-signal-app** (публичный).
-Текущая версия: **0.7.43**. Релизы — вручную с Mac → GitHub Releases.
+Текущая версия: **0.7.44**. Релизы — вручную с Mac → GitHub Releases.
 
-> 🔧 **В РАБОТЕ (не собрано, жду «собирай» → 0.7.44): авто-рерайт Betano RO→BG.** Фид surebet даёт
-> `ro.betano.com/cote/<slug>/<id>/`, а у владельца аккаунт **Betano Bulgaria**. ID события ОБЩИЙ между
-> странами Kaizen (проверено: RO `…/83961881/` = BG `…/83961881/`), поэтому чистый свап домена/пути,
-> поиск по имени не нужен. `lib/bookers.cjs`: `betanoTarget(bookerUrl)` (betano.bg → `{host:www.betano.bg,
-> path:en/match-odds}`, иначе null) + `localizeBetanoUrl(url,target)` (берёт slug+id, собирает BG-URL).
-> `main.cjs routeLeg`: если booker.id=betano и booker.url=betano.bg → `initial`=BG-домашняя + deep-ссылку
-> из резолва переписываем на BG перед загрузкой. Тесты 73/73. **Владельцу:** в карточке Betano выставить
-> «Адрес для входа» = `https://www.betano.bg/` и войти в BG-аккаунт (иначе рерайт не включится).
+**0.7.44 — АВТО-РЕРАЙТ Betano RO→BG (полный автомат).** Фид surebet даёт `ro.betano.com/cote/<slug>/<id>/`,
+а у владельца аккаунт **Betano Bulgaria**. ID события ОБЩИЙ между странами Kaizen (проверено: RO `…/83961881/`
+= BG `…/83961881/`) → чистый свап домена/пути, поиск по имени не нужен. `lib/bookers.cjs`:
+`betanoTarget(bookerUrl)` (betano.bg → `{host:www.betano.bg, path:en/match-odds}`, иначе null) +
+`localizeBetanoUrl(url,target)` (берёт slug+id, собирает BG-URL). `main.cjs routeLeg`: если booker.id=betano
+и booker.url=betano.bg → `initial`=BG-домашняя + deep-ссылку из резолва переписываем на BG. Тесты 73/73.
+**Владельцу:** карточка Betano → «Адрес для входа» = `https://www.betano.bg/` + войти в BG-аккаунт, иначе
+рерайт не включится. Лог при работе: `Betano рерайт страны → www.betano.bg: …`. Расширяемо на др. страны
+тем же `betanoTarget` (ID общий).
 
 **0.7.43 — РАЗМОРОЖЕНА Telegram-пересылка** (по запросу владельца «возобнови высылку вилок из фида в телеграм»).
 `TELEGRAM_FROZEN=false` (main.cjs) + вернул секцию «📨 Сигналы в Telegram» в панель (renderer/index.html +
