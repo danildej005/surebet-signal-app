@@ -582,7 +582,12 @@ async function selectLegOutcome(id) {
     } catch (e) { return { ok: false, win, cfg, bet, error: "не прочитал кнопки исходов: " + e.message }; }
     let eventUrl = ""; try { eventUrl = win.webContents.getURL(); } catch { /* ignore */ }
     const choice = pickOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons, eventUrl, unit, subject: extractSubject(bet.descFull) });
-    if (!choice) return { ok: false, win, cfg, bet, error: "не нашёл исход (линия/кэф). desc=" + (bet.desc || "—") + " кэф=" + (bet.expectedOdds || "?") + " кнопок:" + buttons.length };
+    if (!choice) {
+      // ДИАГНОСТИКА доп-рынков: дампим реальные подписи кнопок, что бот видел — чтобы потом
+      // прицельно научить pickOutcome этим рынкам (карточки/угловые/сет-тайм/DNB/esports и т.п.).
+      try { logger.log("INFO", "  [диаг " + id + "] исход не подошёл; descFull=" + (bet.descFull || bet.desc || "—") + " | видел кнопок: " + JSON.stringify(buttons.slice(0, 50).map((b) => b.text).filter(Boolean))); } catch { /* ignore */ }
+      return { ok: false, win, cfg, bet, error: "не нашёл исход (линия/кэф). desc=" + (bet.desc || "—") + " кэф=" + (bet.expectedOdds || "?") + " кнопок:" + buttons.length };
+    }
     selected = choice.text; selectedOdds = choice.odds; how = choice.how; pickedIndex = choice.i;
     try {
       const clicked = await win.webContents.executeJavaScript(`(() => { const els = [...document.querySelectorAll(${JSON.stringify(sel)})]; const el = els[${Number(choice.i)}]; if (el) { el.click(); return true; } return false; })()`);
