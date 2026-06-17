@@ -12,7 +12,7 @@ const { formatSignal } = require("./lib/format.cjs");
 const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
-const { defaultBookers, emptyProxy, buildProxyString, randomFingerprint, randomUA, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
+const { defaultBookers, emptyProxy, buildProxyString, betanoTarget, localizeBetanoUrl, randomFingerprint, randomUA, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 const fx = require("./lib/fx.cjs");
 const { parseMoney, vilkaStakes } = require("./lib/vilka.cjs");
@@ -733,12 +733,19 @@ async function routeLeg(navUrl) {
   const nav = resolveSurebetNav(navUrl, settings.bookers || []);
   if (!nav || !nav.booker) return { ok: false, error: "плечо не сопоставлено с конторой" };
   pendingBet.set(nav.booker.id, { outcomeId: nav.outcomeId, expectedOdds: nav.expectedOdds, desc: nav.desc, descFull: nav.descFull });
-  const initial = nav.targetUrl || nav.booker.url;
+  // Betano: фид часто даёт RO-домен, а владельцу нужен свой страновой сайт (booker.url, напр. betano.bg).
+  // ID события общий между странами → ниже переписываем deep-ссылку на нужный домен/путь.
+  const betTgt = nav.booker.id === "betano" ? betanoTarget(nav.booker.url) : null;
+  const initial = betTgt ? nav.booker.url : (nav.targetUrl || nav.booker.url);
   logger.log("INFO", "  → контора:", nav.booker.id, "| исход:", nav.desc, "| кэф:", nav.expectedOdds, "| открываю:", initial);
   try { logger.log("INFO", "  [диаг] descFull:", nav.descFull || "—", "| markers:", JSON.stringify(nav.markers || {}).slice(0, 400)); } catch { /* ignore */ }
   await openBookerProfile(nav.booker, initial).catch((e) => logger.log("WARN", "route booker:", e));
   if (!isEventUrl(initial)) {
-    const eventUrl = await resolveEventViaNav(navUrl, nav.booker).catch(() => null);
+    let eventUrl = await resolveEventViaNav(navUrl, nav.booker).catch(() => null);
+    if (eventUrl && betTgt) {
+      const loc = localizeBetanoUrl(eventUrl, betTgt);
+      if (loc !== eventUrl) { logger.log("INFO", "  Betano рерайт страны →", betTgt.host + ":", loc.slice(0, 100)); eventUrl = loc; }
+    }
     const w0 = bookerWins.get(nav.booker.id);
     if (eventUrl && eventUrl !== initial && w0 && !w0.isDestroyed()) { logger.log("INFO", "  глубокая ссылка события:", eventUrl); await w0.loadURL(eventUrl).catch(() => {}); await sleep(2500); }
     // Фолбэк: всё ещё не на КОНКРЕТНОМ событии (Pinnacle часто застревает на /standard/home) →

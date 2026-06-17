@@ -3,7 +3,7 @@
 // Pinnacle: ATP Stuttgart, Shimabukuro–Kyrgios. Betano: тот же матч.
 const test = require("node:test");
 const assert = require("node:assert");
-const { pickOutcome, classifyDesc, orderPlayers, isEventUrl, extractSubject, marketUnit } = require("../lib/bookers.cjs");
+const { pickOutcome, classifyDesc, orderPlayers, isEventUrl, extractSubject, marketUnit, betanoTarget, localizeBetanoUrl } = require("../lib/bookers.cjs");
 
 const SLUG_T = "https://www.betano.pt/odds/sho-shimabukuro-nick-kyrgios/87161959/"; // player1=Shimabukuro
 const SLUG_NBA = "https://www.betano.pt/odds/new-york-knicks-san-antonio-spurs/86655013/"; // player1=Knicks
@@ -314,4 +314,31 @@ test("Pinnacle фора (имени на кнопке нет) — остаётс
   const r = pickOutcome({ desc: "Ф1(+1.5)", expectedOdds: 1.543, buttons: PINN, eventUrl: "https://www.pinnacle888.com/en/standard/tennis/x/sho-shimabukuro-vs-nick-kyrgios/1631805342" });
   assert.strictEqual(r.id, "1631805342|0|2|0|0|+1.5");
   assert.strictEqual(r.how, "desc");
+});
+
+// ── Betano: авто-рерайт страны (RO-фид → BG-аккаунт), ID события общий ─────────
+test("betanoTarget: betano.bg → BG-сайт, прочие → null", () => {
+  const t = betanoTarget("https://www.betano.bg/");
+  assert.deepStrictEqual(t, { host: "www.betano.bg", path: "en/match-odds" });
+  assert.strictEqual(betanoTarget("https://www.betano.pt/"), null);   // PT — без рерайта
+  assert.strictEqual(betanoTarget("https://ro.betano.com/"), null);   // RO-источник — без рерайта
+  assert.strictEqual(betanoTarget(""), null);
+});
+
+test("localizeBetanoUrl: RO deep-ссылка → BG, ID сохранён (реальный пример)", () => {
+  const tgt = betanoTarget("https://www.betano.bg/");
+  const ro = "https://ro.betano.com/cote/cehia-africa-de-sud/83961881/?bt=14";
+  const bg = localizeBetanoUrl(ro, tgt);
+  const u = new URL(bg);
+  assert.strictEqual(u.hostname, "www.betano.bg");
+  assert.strictEqual(u.pathname, "/en/match-odds/cehia-africa-de-sud/83961881/"); // slug сохранён, Betano поправит по id
+  assert.match(bg, /83961881/);          // ID общий → то же событие
+  assert.strictEqual(u.search, "?bt=14"); // рынок-якорь сохранён
+});
+
+test("localizeBetanoUrl: не-betano и домашняя страница — не трогаем", () => {
+  const tgt = betanoTarget("https://www.betano.bg/");
+  assert.strictEqual(localizeBetanoUrl("https://www.pinnacle888.com/en/standard/x/1631929272/", tgt), "https://www.pinnacle888.com/en/standard/x/1631929272/");
+  assert.strictEqual(localizeBetanoUrl("https://ro.betano.com/", tgt), "https://ro.betano.com/"); // нет slug+id
+  assert.strictEqual(localizeBetanoUrl("https://ro.betano.com/cote/x/83961881/", null), "https://ro.betano.com/cote/x/83961881/"); // target=null
 });
