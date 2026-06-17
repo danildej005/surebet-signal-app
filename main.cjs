@@ -1224,9 +1224,9 @@ function sendTgNet(text, { timeoutMs = 15000 } = {}) {
   });
 }
 
-// Пересылка в Telegram ЗАМОРОЖЕНА (фокус на простановке вилок). Код ниже сохранён,
-// чтобы при необходимости вернуть — снять заморозку = убрать ранний return.
-const TELEGRAM_FROZEN = true;
+// Пересылка в Telegram ВКЛЮЧЕНА: сигналы из фида surebet (вилки с Pinnacle) → Telegram.
+// Историческая «заморозка» (на время фокуса на простановке) снята. Флаг оставлен как быстрый выключатель.
+const TELEGRAM_FROZEN = false;
 async function tg(text) {
   if (TELEGRAM_FROZEN) return { ok: false, error: "telegram заморожен" };
   if (!settings.tgToken || !settings.tgChat) return { ok: false, error: "не заданы токен/chat_id" };

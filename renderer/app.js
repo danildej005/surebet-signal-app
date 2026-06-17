@@ -20,8 +20,16 @@ function renderStatus(s) {
     vilkaLimitInit = true;
     if (s.settings.vilkaLimitEur > 0 && document.activeElement !== $("vilkaLimit")) $("vilkaLimit").value = s.settings.vilkaLimitEur;
   }
+  // Telegram-поля: заполняем ОДИН раз при загрузке (токен не показываем — только подсказку «задан»).
+  if (!tgInit && s.settings) {
+    tgInit = true;
+    if ($("tgChat") && s.settings.tgChat) $("tgChat").value = s.settings.tgChat;
+    if ($("tgKeyword") && s.settings.keyword) $("tgKeyword").value = s.settings.keyword;
+    if ($("tgToken")) $("tgToken").placeholder = s.settings.hasToken ? "токен задан — оставь пустым, чтобы не менять" : "вставь токен бота";
+  }
 }
 let vilkaLimitInit = false; // лимит вилки в поле инициализирован (заполняем только раз)
+let tgInit = false;         // Telegram-поля инициализированы (заполняем только раз)
 let botArmedUi = false;
 function setBotBtn(armed) {
   botArmedUi = armed;
@@ -48,6 +56,27 @@ if (window.api.onFx) window.api.onFx(showFx);
 
 // лимит вилки на плечо (€) — сохраняем при изменении
 $("vilkaLimit").onchange = () => window.api.saveSettings({ vilkaLimitEur: Number($("vilkaLimit").value) || 0 });
+
+// ── Telegram: сохранение настроек + тест ──────────────────────────────────────
+async function saveTg() {
+  const patch = { tgChat: $("tgChat").value.trim(), keyword: $("tgKeyword").value.trim() || "pinnacle" };
+  const tok = $("tgToken").value.trim();
+  if (tok) patch.tgToken = tok; // пустой токен не затирает сохранённый (см. main.cjs save-settings)
+  await window.api.saveSettings(patch);
+  $("tgToken").value = ""; // не держим токен в поле
+}
+if ($("tgSave")) $("tgSave").onclick = async () => {
+  try { await saveTg(); $("tgResult").textContent = "✅ сохранено"; }
+  catch (e) { $("tgResult").textContent = "⚠️ " + e.message; }
+};
+if ($("tgTest")) $("tgTest").onclick = async () => {
+  $("tgResult").textContent = "сохраняю и отправляю тест…";
+  try {
+    await saveTg(); // тест шлёт по СОХРАНённым настройкам — сначала сохраняем поля
+    const r = await window.api.testTelegram();
+    $("tgResult").textContent = (r && r.ok) ? "✅ тест отправлен — проверь Telegram" : "⚠️ " + ((r && r.error) || "ошибка");
+  } catch (e) { $("tgResult").textContent = "⚠️ " + e.message; }
+};
 
 function fmtLeg(name, l) {
   if (!l) return name + ": —";

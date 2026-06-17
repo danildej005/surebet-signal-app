@@ -40,6 +40,21 @@
   </section>
 
   <section class="card">
+    <h2>📨 Сигналы в Telegram</h2>
+    <p class="muted">Шлём в Telegram каждую вилку из фида, где есть плечо Pinnacle. Порог дохода и коэффициенты задаёшь в самом фильтре surebet — здесь доход не режется.</p>
+    <label>Токен бота<input id="tgToken" type="text" placeholder="вставь токен бота" autocomplete="off" /></label>
+    <label>Chat ID (куда слать)<input id="tgChat" type="text" placeholder="напр. 123456789 или -100…" autocomplete="off" /></label>
+    <label>Контора-получатель (ключевик)<input id="tgKeyword" type="text" placeholder="pinnacle" autocomplete="off" /></label>
+    <div class="row" style="margin-top:8px;">
+      <button id="tgSave">Сохранить</button>
+      <button id="tgTest" class="ghost">Проверить (тест-сообщение)</button>
+    </div>
+    <div class="muted" id="tgResult"></div>
+    <div class="muted" id="counts" style="margin-top:6px;"></div>
+    <div class="muted" id="lastSignal"></div>
+  </section>
+
+  <section class="card">
     <div class="row">
       <button id="toggleRun" class="ghost">Пауза / Возобновить</button>
       <button id="openLogs" class="ghost">Показать логи</button>
