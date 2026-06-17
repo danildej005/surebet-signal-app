@@ -547,13 +547,16 @@ async function selectLegOutcome(id) {
     const unit = marketUnit(bet.descFull); // сеты/геймы — для вкладки Pinnacle и маппинга фора→счёт
     await dismissConsent(win); // снять cookie/TCF-оверлей, если перекрыл купон (иначе кнопок/поля нет)
     await clearBetslip(win, cfg); // купон ВСЕГДА чист перед выбором (убрать накопленные неподтверждённые)
-    // Дождаться, пока контора ПРОРИСУЕТ кнопки исходов (Pinnacle standard SPA рендерит ~10с) —
-    // иначе читаем пустую страницу и получаем «кнопок:0».
-    for (let i = 0; i < 15; i++) {
+    // Дождаться, пока контора ПРОРИСУЕТ кнопки исходов И их число СТАБИЛИЗИРУЕТСЯ. Раньше выходили на
+    // первой же кнопке (n>0) → читали полу-прогруженную страницу (18 кнопок) и «не нашёл исход» на
+    // основных рынках. Теперь ждём, пока количество перестанет расти (рынки догрузились), либо таймаут.
+    let prevN = -1, stable = 0;
+    for (let i = 0; i < 16; i++) {
       await dismissConsent(win); // cookie-оверлей может всплыть ПОЗЖЕ начального — ловим его в цикле
       let n = 0; try { n = await win.webContents.executeJavaScript(`document.querySelectorAll(${JSON.stringify(sel)}).length`); } catch { /* ignore */ }
-      if (n > 0) break;
-      await sleep(1000);
+      if (n > 0 && n === prevN) { if (++stable >= 2) break; } else { stable = 0; } // не растёт 2 тика подряд → прогрузилось
+      prevN = n;
+      await sleep(800);
     }
     if (id === "pinnacle") { // вкладка по единице (сеты/геймы, если есть) + ВСЕГДА «Show All» (раскрыть альт-линии)
       try {

@@ -333,7 +333,7 @@ test("localizeBetanoUrl: RO deep-ссылка → BG, ID сохранён (ре�
   assert.strictEqual(u.hostname, "www.betano.bg");
   assert.strictEqual(u.pathname, "/en/match-odds/cehia-africa-de-sud/83961881/"); // slug сохранён, Betano поправит по id
   assert.match(bg, /83961881/);          // ID общий → то же событие
-  assert.strictEqual(u.search, "?bt=14"); // рынок-якорь сохранён
+  assert.strictEqual(u.search, "");      // ?bt= отброшен — открываем полную страницу события
 });
 
 test("localizeBetanoUrl: не-betano и домашняя страница — не трогаем", () => {
