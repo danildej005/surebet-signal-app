@@ -316,6 +316,31 @@ test("Pinnacle фора (имени на кнопке нет) — остаётс
   assert.strictEqual(r.how, "desc");
 });
 
+// ── Доп-рынок «X 1-2» (нет ничьи / DNB): для 2-исходных видов = победитель ─────
+test("classifyDesc: «1 1-2» (полный матч, нет ничьи) → победа side 1, nodraw", () => {
+  const r = classifyDesc("1 1-2");
+  assert.strictEqual(r.kind, "win"); assert.strictEqual(r.side, "1"); assert.strictEqual(r.nodraw, true);
+  assert.strictEqual(classifyDesc("2 1-2").side, "2");
+});
+test("classifyDesc: «1 1-2 1st set» (саб-период) → не берём (null)", () => {
+  assert.strictEqual(classifyDesc("1 1-2 1st set").kind, null);
+});
+test("pickOutcome: «1 1-2» теннис @5.6 → победитель Petja Drame 5.60 (реальный кейс из лога)", () => {
+  const buttons = [
+    { i: 0, id: "", text: "Petja Drame 5.60" }, { i: 1, id: "", text: "Karine Sarkisova 1.10" },
+    { i: 2, id: "", text: "4.20" }, { i: 3, id: "", text: "1.18" },
+  ];
+  const r = pickOutcome({ desc: "1 1-2", expectedOdds: 5.6, buttons, eventUrl: "https://www.betano.bg/en/match-odds/petja-drame-karine-sarkisova/87599652/", subject: "Petja Drame" });
+  assert.ok(r, "должен найти исход"); assert.strictEqual(r.text, "Petja Drame 5.60");
+});
+test("pickOutcome: «1 1-2» с НИЧЬЕЙ на странице (3-исходный) → null (не подменяем DNB победителем)", () => {
+  const buttons = [
+    { i: 0, id: "", text: "Team A 1.40" }, { i: 1, id: "", text: "X 3.50" }, { i: 2, id: "", text: "Team B 5.00" },
+  ];
+  const r = pickOutcome({ desc: "1 1-2", expectedOdds: 1.25, buttons, eventUrl: "https://www.betano.bg/en/match-odds/team-a-team-b/123456/", subject: "Team A" });
+  assert.strictEqual(r, null);
+});
+
 // ── Betano: авто-рерайт страны (RO-фид → BG-аккаунт), ID события общий ─────────
 test("betanoTarget: betano.bg → BG-сайт, прочие → null", () => {
   const t = betanoTarget("https://www.betano.bg/");
