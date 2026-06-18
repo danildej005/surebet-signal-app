@@ -438,3 +438,23 @@ test("pickOutcome: nodraw тугой порог — соккерный 1X2 ка�
   const r = pickOutcome({ desc: "1 1-2", expectedOdds: 1.25, buttons, subject: "Team A", eventUrl: "https://x/team-a-team-b/1/" });
   assert.strictEqual(r, null);
 });
+
+// ── КРОСС-ПРОВЕРКА ПЛЕЧ: оба на одну сторону = НЕ хедж (защита от бага «обе на одну команду») ──
+const { sameSideSelected } = require("../lib/bookers.cjs");
+test("sameSideSelected: обе на одну команду (реальный баг Angels) → true (не ставим)", () => {
+  assert.strictEqual(sameSideSelected("Los Angeles Angels +1 2.10", "Los Angeles Angels 2.220"), true);
+});
+test("sameSideSelected: противоположные команды (настоящая вилка) → false (ставим)", () => {
+  assert.strictEqual(sameSideSelected("Los Angeles Angels +1 2.10", "Athletics 1.757"), false);
+});
+test("sameSideSelected: тотал оба Over → true; Over↔Under → false", () => {
+  assert.strictEqual(sameSideSelected("Over 8.5 1.95", "Over 8.5 2.02"), true);
+  assert.strictEqual(sameSideSelected("Under 3.5 1.27", "Over 3.5 3.85"), false);
+});
+test("sameSideSelected: сокращение имени (LA Angels ⊂ Los Angeles Angels) → true", () => {
+  assert.strictEqual(sameSideSelected("LA Angels 2.10", "Los Angeles Angels 2.22"), true);
+});
+test("pickOutcome: DNB без подтверждения именем (нет subject/URL) → null (не угадываем по кэфу)", () => {
+  const buttons = withIndex([{ text: "Team A 2.10" }, { text: "Team B 1.80" }]);
+  assert.strictEqual(pickOutcome({ desc: "1 1-2", expectedOdds: 2.10, buttons }), null);
+});

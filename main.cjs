@@ -12,7 +12,7 @@ const { formatSignal } = require("./lib/format.cjs");
 const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
-const { defaultBookers, emptyProxy, buildProxyString, betanoTarget, localizeBetanoUrl, betanoCategoryFor, randomFingerprint, randomUA, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
+const { defaultBookers, emptyProxy, buildProxyString, betanoTarget, localizeBetanoUrl, betanoCategoryFor, sameSideSelected, randomFingerprint, randomUA, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 const fx = require("./lib/fx.cjs");
 const { parseMoney, vilkaStakes } = require("./lib/vilka.cjs");
@@ -1031,6 +1031,11 @@ async function runOneBotCycle(live = false) {
     const sP = await selectLegOutcome("pinnacle");
     // Pinnacle не вышел, а Betano уже выбран → снимаем выбор Betano, чтобы купон не копил экспресс
     if (!sP.ok) { await deselectLeg("betano", sB.selectedIndex); return skip("Pinnacle: " + sP.error); }
+    // 🔴 КРОСС-ПРОВЕРКА: оба плеча НЕ должны быть на одной стороне (одна команда / оба Over|Under) — это НЕ хедж.
+    if (sameSideSelected(sB.selected, sP.selected)) {
+      await deselectLeg("betano", sB.selectedIndex); await deselectLeg("pinnacle", sP.selectedIndex);
+      return skip("ОДНА СТОРОНА на обоих плечах (не хедж, не ставлю): B[" + (sB.selected || "?") + "] | P[" + (sP.selected || "?") + "]");
+    }
     // ПОТОЛОК ПЛЕЧА.
     // Betano: НЕ читаем баланс для капа — ридер ненадёжен (хватает уже ПОСТАВЛЕННЫЕ ставки «Single X€»/
     // «CASH OUT» и занижал ставку до копеек, по нарастающей). Кнопка MAX уже = min(макс события, баланс),
