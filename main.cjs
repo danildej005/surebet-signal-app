@@ -573,6 +573,16 @@ async function selectLegOutcome(id) {
         await sleep(1500);
       } catch (e) { logger.log("WARN", "pinnacle tab/showall:", e); }
     }
+    if (id === "betano") { // Betano по умолчанию показывает лишь ВЕРХУШКУ рынков; «SHOW ALL» (.load-more)
+      try {                // догружает остальные (карточки/угловые/альт-линии фор и тоталов). Кликаем все, в неск. проходов.
+        for (let pass = 0; pass < 4; pass++) {
+          let n = 0;
+          try { n = await win.webContents.executeJavaScript(`(() => { const els = [...document.querySelectorAll('.load-more')].filter((b) => b.offsetParent !== null); els.forEach((b) => { try { b.click(); } catch (e) {} }); return els.length; })()`); } catch { /* ignore */ }
+          if (!n) break;
+          await sleep(1200);
+        }
+      } catch (e) { logger.log("WARN", "betano show-all:", e); }
+    }
     let buttons = [];
     try {
       buttons = await win.webContents.executeJavaScript(`(() => {
