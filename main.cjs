@@ -1320,6 +1320,7 @@ function sendTgNet(text, { timeoutMs = 15000 } = {}) {
 // Пересылка в Telegram ВКЛЮЧЕНА: сигналы из фида surebet (вилки с Pinnacle) → Telegram.
 // Историческая «заморозка» (на время фокуса на простановке) снята. Флаг оставлен как быстрый выключатель.
 const TELEGRAM_FROZEN = false;
+const FEED_SIGNALS = false; // слать в Telegram ВЕСЬ фид вилок? НЕТ — только реально ПОСТАВЛЕННЫЕ ставки (фид забивал лимит Telegram, из-за чего поставленные не доходили).
 async function tg(text) {
   if (TELEGRAM_FROZEN) return { ok: false, error: "telegram заморожен" };
   if (!settings.tgToken || !settings.tgChat) return { ok: false, error: "не заданы токен/chat_id" };
@@ -1382,7 +1383,7 @@ async function tick() {
   status.pinnacle = wanted.length;
 
   for (const s of wanted) {
-    if (TELEGRAM_FROZEN) break; // пересылка заморожена — не дёргаем и не спамим лог
+    if (TELEGRAM_FROZEN || !FEED_SIGNALS) break; // фид в Telegram ОТКЛЮЧЁН — шлём только поставленные ставки (см. FEED_SIGNALS)
     if (!dedupe.shouldSend(s.id)) continue;
     if (!settings.tgToken || !settings.tgChat) break; // некуда слать
     const res = await tg(formatSignal(s, settings.keyword));
@@ -1402,8 +1403,13 @@ async function tick() {
       recordBotStat(res); // обновить счётчики сессии (успехи/скипы/хедж/экспозиция)
       if (panelWin && !panelWin.isDestroyed()) panelWin.webContents.send("bot", res);
       sendBotPulse(); // обновить счётчики в панели сразу после цикла
-      // УСПЕШНАЯ вилка → в Telegram с полным логом (хедж/dry-run/незахедж). Скипы не шлём.
-      if (res.ok && settings.tgToken && settings.tgChat) tg(formatBotTelegram(res, botArmLive)).catch(() => {});
+      // В Telegram — ТОЛЬКО реально поставленные ставки (res.placed = хедж или экспозиция) + случай «Betano не
+      // принял». Холостые «кэф уехал»/dry-run НЕ шлём (иначе спам и лимит Telegram). Ошибку отправки логируем.
+      if ((res.placed || res.hedge === "none") && settings.tgToken && settings.tgChat) {
+        tg(formatBotTelegram(res, botArmLive))
+          .then((r) => { if (r && !r.ok) logger.log("WARN", "Telegram (ставка) не отправлено:", r.error); })
+          .catch((e) => logger.log("WARN", "Telegram (ставка):", e && e.message));
+      }
       // 🔴 АВТО-СТОП без участия владельца: незахеджированная ставка (Betano принят, Pinnacle нет)
       if (res.hedge === "exposed") {
         botArmed = false; status.botArmed = false;
