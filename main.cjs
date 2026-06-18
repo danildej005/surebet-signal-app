@@ -12,7 +12,7 @@ const { formatSignal } = require("./lib/format.cjs");
 const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
-const { defaultBookers, emptyProxy, buildProxyString, betanoTarget, localizeBetanoUrl, randomFingerprint, randomUA, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
+const { defaultBookers, emptyProxy, buildProxyString, betanoTarget, localizeBetanoUrl, betanoCategoryFor, randomFingerprint, randomUA, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 const fx = require("./lib/fx.cjs");
 const { parseMoney, vilkaStakes } = require("./lib/vilka.cjs");
@@ -573,8 +573,24 @@ async function selectLegOutcome(id) {
         await sleep(1500);
       } catch (e) { logger.log("WARN", "pinnacle tab/showall:", e); }
     }
-    if (id === "betano") { // Betano по умолчанию показывает лишь ВЕРХУШКУ рынков; «SHOW ALL» (.load-more)
-      try {                // догружает остальные (карточки/угловые/альт-линии фор и тоталов). Кликаем все, в неск. проходов.
+    if (id === "betano") {
+      // СПЕЦ-рынок (карточки/угловые)? Кликнуть вкладку категории — отфильтровать страницу на нужные рынки,
+      // иначе «Under 3.5» карточек путается с тоталом голов. Вкладки — swiper-чипы сверху события.
+      const cat = betanoCategoryFor(bet.descFull);
+      if (cat) {
+        try {
+          const ok = await win.webContents.executeJavaScript(`(() => {
+            const cat = ${JSON.stringify(cat)}.toLowerCase();
+            const els = [...document.querySelectorAll('.swiper-slide, [class*="swiper"] div, button, [role=button], a')];
+            const el = els.find((e) => e.offsetParent !== null && (e.innerText || '').trim().toLowerCase() === cat);
+            if (el) { el.click(); return true; } return false;
+          })()`);
+          logger.log("INFO", "  Betano вкладка категории:", cat, ok ? "→ кликнул" : "→ НЕ найдена");
+          if (ok) await sleep(1600);
+        } catch (e) { logger.log("WARN", "betano категория:", e); }
+      }
+      // SHOW ALL (.load-more): раскрыть все ЛИНИИ текущих рынков (альт-линии). Кликаем все, в неск. проходов.
+      try {
         for (let pass = 0; pass < 4; pass++) {
           let n = 0;
           try { n = await win.webContents.executeJavaScript(`(() => { const els = [...document.querySelectorAll('.load-more')].filter((b) => b.offsetParent !== null); els.forEach((b) => { try { b.click(); } catch (e) {} }); return els.length; })()`); } catch { /* ignore */ }

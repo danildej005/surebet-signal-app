@@ -3,7 +3,7 @@
 // Pinnacle: ATP Stuttgart, Shimabukuro–Kyrgios. Betano: тот же матч.
 const test = require("node:test");
 const assert = require("node:assert");
-const { pickOutcome, classifyDesc, orderPlayers, isEventUrl, extractSubject, marketUnit, betanoTarget, localizeBetanoUrl } = require("../lib/bookers.cjs");
+const { pickOutcome, classifyDesc, orderPlayers, isEventUrl, extractSubject, marketUnit, betanoTarget, localizeBetanoUrl, betanoCategoryFor } = require("../lib/bookers.cjs");
 
 const SLUG_T = "https://www.betano.pt/odds/sho-shimabukuro-nick-kyrgios/87161959/"; // player1=Shimabukuro
 const SLUG_NBA = "https://www.betano.pt/odds/new-york-knicks-san-antonio-spurs/86655013/"; // player1=Knicks
@@ -366,4 +366,14 @@ test("localizeBetanoUrl: не-betano и домашняя страница — н
   assert.strictEqual(localizeBetanoUrl("https://www.pinnacle888.com/en/standard/x/1631929272/", tgt), "https://www.pinnacle888.com/en/standard/x/1631929272/");
   assert.strictEqual(localizeBetanoUrl("https://ro.betano.com/", tgt), "https://ro.betano.com/"); // нет slug+id
   assert.strictEqual(localizeBetanoUrl("https://ro.betano.com/cote/x/83961881/", null), "https://ro.betano.com/cote/x/83961881/"); // target=null
+});
+
+// ── Betano: вкладка категории для спец-рынков (карточки/угловые) ───────────────
+test("betanoCategoryFor: карточки → Cards, угловые → Corner kicks, прочее → null", () => {
+  assert.strictEqual(betanoCategoryFor("Тотал меньше 3.5 - карточки"), "Cards");
+  assert.strictEqual(betanoCategoryFor("Total under 4.5 - cards"), "Cards");
+  assert.strictEqual(betanoCategoryFor("Тотал больше 1.5 - угловые команда X"), "Corner kicks");
+  assert.strictEqual(betanoCategoryFor("Total over 8.5 - corners"), "Corner kicks");
+  assert.strictEqual(betanoCategoryFor("Petja Drame to win (no draw) - sets"), null);
+  assert.strictEqual(betanoCategoryFor(""), null);
 });
