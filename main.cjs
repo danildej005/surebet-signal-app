@@ -861,7 +861,7 @@ function sendBotPulse(extra) {
   try {
     panelWin.webContents.send("bot-pulse", {
       armed: botArmed, busy: botBusy, tried: triedVilkas.size,
-      success: botStats ? botStats.completed : 0, target: TEST_TARGET,
+      success: botStats ? botStats.completed : 0, target: 0, // 0 = без лимита (бот не стопается на N успехах)
       records: botPulseState.records, pairs: botPulseState.pairs, fresh: botPulseState.fresh,
       // счётчики сессии: всего обработано / оба плеча (хедж) / незахеджировано / пропущено
       total: botStats ? botStats.attempts : 0, hedged: botStats ? botStats.hedged : 0,
@@ -874,8 +874,8 @@ let botArmed = false;          // «взведён»: ждём вилку и о�
 let botArmLive = false;        // боевой ли цикл (только при тумблере БОЕВОЙ)
 const triedVilkas = new Set(); // токены вилок, которые бот пробовал → пропускаем дальше (и успех, и скип)
 
-// === Тест-режим: бот НЕ останавливается на успехе, крутит до TEST_TARGET успешных циклов, потом отчёт ===
-const TEST_TARGET = 10;        // сколько успешных циклов собрать в тесте
+// === Бот НЕ останавливается на успехе и НЕ имеет лимита по числу циклов — крутит бесконечно. Стоп только
+// вручную (кнопка) или авто-стопом при незахеджированной ставке. Счётчики сессии копятся для отчёта. ===
 let botStats = null;           // счётчики текущего захода (null = ещё не взводили)
 function newBotStats() {
   return { startedAt: Date.now(), attempts: 0, completed: 0, skipped: 0, skipReasons: {}, sports: {}, completedDetails: [],
@@ -916,7 +916,7 @@ function recordBotStat(res) {
       b: res.betano.selected, bMax: res.betano.max, bBal: res.betano.balance,
       p: res.pinnacle.selected, pMax: res.pinnacle.max, pBal: res.pinnacle.balance,
     });
-    logger.log("INFO", "[бот ТЕСТ] успешный цикл " + botStats.completed + "/" + TEST_TARGET + " · " + (res.sport || "?") + " · " + res.profitPct + "%");
+    logger.log("INFO", "[бот] успешный цикл " + botStats.completed + " · " + (res.sport || "?") + " · " + res.profitPct + "%");
   }
 }
 function formatBotStats(s) {
@@ -1337,7 +1337,7 @@ async function tick() {
   if (botArmed) sendBotPulse();
   // Режим ожидания бота: взведён и не занят → ловим НОВУЮ вилку и отрабатываем цикл.
   // Запускаем без await (цикл долгий) — botBusy не даёт перезапуститься на следующем тике.
-  // ТЕСТ-РЕЖИМ: НЕ останавливаемся на успехе, копим статистику и крутим до TEST_TARGET успехов, потом отчёт.
+  // БЕЗ ЛИМИТА: не останавливаемся на успехе, копим статистику, крутим бесконечно (стоп — вручную/незахедж).
   if (botArmed && !botBusy) {
     runOneBotCycle(botArmLive).then((res) => {
       if (!res) return; // подходящей вилки нет — ждём дальше
@@ -1356,14 +1356,8 @@ async function tick() {
         sendBotPulse({ armed: false }); pushStatus();
         return;
       }
-      if (botStats && botStats.completed >= TEST_TARGET) { // собрали 10 успешных → стоп + отчёт
-        botArmed = false; status.botArmed = false;
-        const report = formatBotStats(botStats);
-        logger.log("INFO", "[бот ТЕСТ] ИТОГ:\n" + report);
-        if (panelWin && !panelWin.isDestroyed()) panelWin.webContents.send("bot-stats", report);
-        pushStatus();
-      }
-      // иначе (успех или скип) остаёмся взведёнными и ищем следующую вилку
+      // Лимита по числу успехов НЕТ — бот крутит бесконечно. Стоп только вручную (кнопка) или авто-стопом
+      // при незахеджированной ставке (выше). Успех/скип → остаёмся взведёнными и ищем следующую вилку.
     }).catch((e) => logger.log("ERROR", "bot cycle:", e));
   }
 
@@ -1566,7 +1560,7 @@ ipcMain.handle("run-bot", (_e, live) => {
   botPulseState = { records: 0, pairs: 0, fresh: 0, error: null };
   botArmed = true; botArmLive = !!live && !!settings.liveMode; status.botArmed = true; pushStatus();
   sendBotPulse(); // мгновенно показать «взведён»
-  logger.log("INFO", "[бот] взведён, жду вилку; режим:", botArmLive ? "БОЕВОЙ" : "dry-run", "| тест до", TEST_TARGET, "успешных");
+  logger.log("INFO", "[бот] взведён, жду вилку; режим:", botArmLive ? "БОЕВОЙ" : "dry-run", "| без лимита (стоп вручную / при незахедже)");
   return { armed: true, live: botArmLive };
 });
 

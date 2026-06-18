@@ -131,10 +131,10 @@ if (window.api.onBotPulse) window.api.onBotPulse((p) => {
   } else if (p.wait) {
     color = "#e67e22"; s = "⏸ жду пополнения баланса: " + p.wait; // плечо не покрывается — ждём, не выключаемся
   } else if (p.busy) {
-    color = "#2980b9"; s = "⚙️ обрабатываю вилку… · успехов " + (p.success || 0) + "/" + (p.target || "?") + " · пробовано " + (p.tried || 0);
+    color = "#2980b9"; s = "⚙️ обрабатываю вилку… · успехов " + (p.success || 0) + (p.target ? "/" + p.target : "") + " · пробовано " + (p.tried || 0);
   } else {
     color = "#27ae60"; s = "🟢 жив, жду вилку · в фиде " + (p.records || 0) + ", годных пар " + (p.pairs || 0) + ", новых " + (p.fresh || 0) +
-      " · успехов " + (p.success || 0) + "/" + (p.target || "?") + " · пробовано " + (p.tried || 0);
+      " · успехов " + (p.success || 0) + (p.target ? "/" + p.target : "") + " · пробовано " + (p.tried || 0);
   }
   el.style.color = color;
   el.textContent = "бот " + t + ": " + s;
