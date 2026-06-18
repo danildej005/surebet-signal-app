@@ -944,6 +944,33 @@ function formatBotStats(s) {
   return L.join("\n");
 }
 
+// Сообщение в Telegram по УСПЕШНОЙ вилке (полный лог). HTML (tg шлёт parse_mode=HTML).
+function escHtml(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function fmtTgLeg(name, l) {
+  if (!l) return name + ": —";
+  const ok = l.oddsOk === false ? " ⚠️кэф уехал" : (l.oddsOk ? " ✓" : "");
+  return "<b>" + name + ":</b> " + escHtml(l.selected || "?") + " @ " + escHtml(l.odds) + ok +
+    "\n   ставка " + escHtml(l.stakeValue != null ? l.stakeValue : l.stake) + " · макс " + escHtml(l.max != null ? l.max : "?") +
+    " · кнопка: " + escHtml(l.placeBtn || "—");
+}
+function formatBotTelegram(res, live) {
+  const head = res.hedge === "ok" ? "✅ ХЕДЖ ПОСТАВЛЕН"
+    : res.hedge === "exposed" ? "🔴 НЕЗАХЕДЖИРОВАНО — одно плечо в игре!"
+    : res.hedge === "none" ? "⚠️ Betano не принял (Pinnacle не ставили)"
+    : (live ? "✅ цикл (боевой)" : "🧪 dry-run (ставки не делались)");
+  const lines = [
+    "🤖 <b>" + head + "</b>",
+    escHtml(res.pair || "") + (res.sport ? " · " + escHtml(res.sport) : ""),
+    "Профит: <b>" + escHtml(res.profitPct) + "%</b> (" + escHtml(res.profitEur) + "€ из " + escHtml(res.totalEur) + "€) · курс " + escHtml(res.rate),
+    fmtTgLeg("Betano", res.betano),
+    fmtTgLeg("Pinnacle", res.pinnacle),
+    res.token ? "token: " + escHtml(res.token) : null,
+    new Date().toLocaleString(),
+    "<code>" + escHtml(JSON.stringify(res)) + "</code>", // полный лог как есть
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+
 // Один цикл: поймать+кликнуть НОВУЮ (не пробованную) вилку → события → выбор → расчёт → суммы →
 // (live) клик. Возврат: null — подходящей вилки сейчас нет (ждём); {skipped} — вилку не смог,
 // занёс в пропуск, ищем дальше; {ok} — успех (бот разоружается).
@@ -1345,6 +1372,8 @@ async function tick() {
       recordBotStat(res); // обновить счётчики сессии (успехи/скипы/хедж/экспозиция)
       if (panelWin && !panelWin.isDestroyed()) panelWin.webContents.send("bot", res);
       sendBotPulse(); // обновить счётчики в панели сразу после цикла
+      // УСПЕШНАЯ вилка → в Telegram с полным логом (хедж/dry-run/незахедж). Скипы не шлём.
+      if (res.ok && settings.tgToken && settings.tgChat) tg(formatBotTelegram(res, botArmLive)).catch(() => {});
       // 🔴 АВТО-СТОП без участия владельца: незахеджированная ставка (Betano принят, Pinnacle нет)
       if (res.hedge === "exposed") {
         botArmed = false; status.botArmed = false;
