@@ -1086,8 +1086,19 @@ const BOOKER_SUMMARY_JS = `(() => {
     .filter((e) => vis(e) && limRe.test(e.innerText || '') && (e.children.length === 0 || (e.innerText || '').length < 60))
     .slice(0, 40)
     .map((e) => 'LIM <' + e.tagName.toLowerCase() + '> "' + cut(e.innerText, 50) + '" cls="' + cut(e.className, 50) + '"');
+  // СЕКЦИИ РЫНКОВ (аккордеоны): доп-рынки (Cards/Corners/BTTS/таймы…) скрыты под раскрывающимися списками.
+  // Дампим (а) элементы с aria-expanded (заголовок + открыт/свёрнут), (б) кандидаты-заголовки по ключевым словам.
+  const secRe = /cards|corner|booking|both teams|half|period|quarter|maps|rounds|double chance|correct score|handicap|total/i;
+  const secAria = [...document.querySelectorAll('[aria-expanded]')].filter(vis)
+    .map((e) => 'SEC[' + (e.getAttribute('aria-expanded') === 'true' ? 'открыт' : 'свёрнут') + '] "' + cut(e.innerText, 45) + '" cls="' + cut(e.className, 45) + '"');
+  const secKw = [...document.querySelectorAll('div,span,button,h2,h3,h4,[role=button]')]
+    .filter((e) => vis(e) && secRe.test(e.innerText || '') && (e.innerText || '').length < 45 && e.children.length <= 4)
+    .map((e) => 'HDR <' + e.tagName.toLowerCase() + '> "' + cut(e.innerText, 45) + '" cls="' + cut(e.className, 45) + '"');
+  const secSeen = new Set();
+  const secs = secAria.concat(secKw).filter((s) => { if (secSeen.has(s)) return false; secSeen.add(s); return true; }).slice(0, 80);
   return 'URL: ' + location.href + '\\n\\n=== ПОЛЯ ВВОДА (' + inputs.length + ') ===\\n' + inputs.join('\\n') +
     '\\n\\n=== КНОПКИ (' + btns.length + ') ===\\n' + btns.join('\\n') +
+    '\\n\\n=== СЕКЦИИ РЫНКОВ (' + secs.length + ') ===\\n' + secs.join('\\n') +
     '\\n\\n=== ЛИМИТЫ/MAX (' + lims.length + ') ===\\n' + lims.join('\\n');
 })()`;
 
