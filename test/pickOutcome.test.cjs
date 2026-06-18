@@ -377,3 +377,39 @@ test("betanoCategoryFor: карточки → Cards, угловые → Corner k
   assert.strictEqual(betanoCategoryFor("Petja Drame to win (no draw) - sets"), null);
   assert.strictEqual(betanoCategoryFor(""), null);
 });
+
+// ── Betano: ЕВРОПЕЙСКИЙ гандикап (бейсбол, вкладка Handicap) — реальные кнопки из капчи ──
+const MLB_EH = withIndex([
+  { text: "Athletics -1.5 2.37" }, { text: "Los Angeles Angels +1.5 1.60" },   // азиатские (.5) — НЕ евро
+  { text: "Athletics -1 2.35" }, { text: "Tie -1 5.30" }, { text: "Los Angeles Angels +1 2.10" }, // евро incl. extra innings
+  { text: "Athletics -1 3.10" }, { text: "Tie -1 5.70" }, { text: "Los Angeles Angels +1 1.67" }, // евро 3 full innings
+]);
+const MLB_URL = "https://www.betano.bg/en/match-odds/athletics-los-angeles-angels/85397353/";
+
+test("classifyDesc: «1(1:0)» → европейский гандикап (ehcap), а «Ф1(+1.5)» остаётся азиатским", () => {
+  assert.strictEqual(classifyDesc("1(1:0)").kind, "ehcap");
+  assert.strictEqual(classifyDesc("1(1:0)").side, "1");
+  assert.strictEqual(classifyDesc("2(0:1) ОТ").kind, "ehcap");
+  assert.strictEqual(classifyDesc("Ф1(+1.5)").kind, "hcap");
+});
+
+test("pickOutcome: евро-гандикап «1(1:0)» Athletics @2.35 → Athletics -1 2.35 (incl. extra innings по кэфу, не .5, не Tie)", () => {
+  const r = pickOutcome({ desc: "1(1:0)", expectedOdds: 2.35, buttons: MLB_EH, subject: "Athletics", eventUrl: MLB_URL });
+  assert.ok(r, "должен найти исход");
+  assert.strictEqual(r.text, "Athletics -1 2.35");
+});
+
+test("pickOutcome: евро-гандикап «2(0:1)» Angels @2.10 → Los Angeles Angels +1 2.10", () => {
+  const r = pickOutcome({ desc: "2(0:1)", expectedOdds: 2.10, buttons: MLB_EH, subject: "Los Angeles Angels", eventUrl: MLB_URL });
+  assert.ok(r, "должен найти исход");
+  assert.strictEqual(r.text, "Los Angeles Angels +1 2.10");
+});
+
+test("pickOutcome: евро-гандикап — если кэф далёк (не тот вариант) → null (страховка)", () => {
+  const r = pickOutcome({ desc: "1(1:0)", expectedOdds: 9.99, buttons: MLB_EH, subject: "Athletics", eventUrl: MLB_URL });
+  assert.strictEqual(r, null);
+});
+
+test("betanoCategoryFor: европейский гандикап → вкладка Handicap", () => {
+  assert.strictEqual(betanoCategoryFor("Cleveland Guardians победит с форой 1:0 (европейский гандикап) с учётом овертайма - раны"), "Handicap");
+});
