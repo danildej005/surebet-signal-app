@@ -978,7 +978,8 @@ function formatBotTelegram(res, live) {
   const head = res.hedge === "ok" ? "✅ ХЕДЖ ПОСТАВЛЕН"
     : res.hedge === "exposed" ? "🔴 НЕЗАХЕДЖИРОВАНО — одно плечо в игре!"
     : res.hedge === "none" ? "⚠️ Betano не принял (Pinnacle не ставили)"
-    : (live ? "✅ цикл (боевой)" : "🧪 dry-run (ставки не делались)");
+    : !live ? "🧪 dry-run (ставки НЕ делались)"
+    : "⏭ НЕ ПОСТАВЛЕНО (кэф уехал / условия не сошлись)";
   const lines = [
     "🤖 <b>" + head + "</b>",
     escHtml(res.pair || "") + (res.sport ? " · " + escHtml(res.sport) : ""),
