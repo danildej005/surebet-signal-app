@@ -413,3 +413,28 @@ test("pickOutcome: евро-гандикап — если кэф далёк (н�
 test("betanoCategoryFor: европейский гандикап → вкладка Handicap", () => {
   assert.strictEqual(betanoCategoryFor("Cleveland Guardians победит с форой 1:0 (европейский гандикап) с учётом овертайма - раны"), "Handicap");
 });
+
+// ── Pinnacle: «1-2 OT» (DNB incl. overtime, бейсбол) → 2-way мани-лайн команды (реальные кнопки из лога) ──
+const PINN_MLB_ML = withIndex([
+  { text: "Milwaukee Brewers 1.671" }, { text: "Cleveland Guardians 2.370" }, // 2-way мани-лайн (без ничьи, incl OT)
+  { text: "-1.5 2.520" }, { text: "+1.5 1.591" }, { text: "Over 7.5 1.980" }, { text: "Under 7.5 1.909" },
+  { text: "Milwaukee Brewers 3.810" }, { text: "Draw 1.694" }, { text: "Cleveland Guardians 4.500" }, // 3-way (регламент)
+]);
+const PINN_MLB_URL = "https://www.pinnacle888.com/en/standard/baseball/mlb/cleveland-guardians-vs-milwaukee-brewers/1631842611";
+
+test("classifyDesc: «1 1-2 OT» (суффикс) → nodraw side 1", () => {
+  const r = classifyDesc("1 1-2 OT");
+  assert.strictEqual(r.kind, "win"); assert.strictEqual(r.side, "1"); assert.strictEqual(r.nodraw, true);
+});
+
+test("pickOutcome: «1 1-2 OT» @2.37 → Cleveland Guardians 2.370 (2-way мани-лайн, не 3-way 4.500)", () => {
+  const r = pickOutcome({ desc: "1 1-2 OT", expectedOdds: 2.37, buttons: PINN_MLB_ML, subject: "Cleveland Guardians", eventUrl: PINN_MLB_URL });
+  assert.ok(r, "должен найти исход");
+  assert.strictEqual(r.text, "Cleveland Guardians 2.370");
+});
+
+test("pickOutcome: nodraw тугой порог — соккерный 1X2 как DNB (кэф далёк) → null", () => {
+  const buttons = withIndex([{ text: "Team A 1.40" }, { text: "X 3.50" }, { text: "Team B 5.00" }]);
+  const r = pickOutcome({ desc: "1 1-2", expectedOdds: 1.25, buttons, subject: "Team A", eventUrl: "https://x/team-a-team-b/1/" });
+  assert.strictEqual(r, null);
+});
