@@ -458,3 +458,8 @@ test("pickOutcome: DNB без подтверждения именем (нет su
   const buttons = withIndex([{ text: "Team A 2.10" }, { text: "Team B 1.80" }]);
   assert.strictEqual(pickOutcome({ desc: "1 1-2", expectedOdds: 2.10, buttons }), null);
 });
+
+test("sameSideSelected: индивидуальный тотал ОДНОЙ команды Over↔Under → false (разрешаем — это валидный хедж)", () => {
+  assert.strictEqual(sameSideSelected("San Francisco Giants Over 4.5 1.95", "San Francisco Giants Under 4.5 2.05"), false);
+  assert.strictEqual(sameSideSelected("Giants Over 4.5", "Giants Over 4.5"), true); // оба Over = не хедж → блок
+});
