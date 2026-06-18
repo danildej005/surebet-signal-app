@@ -966,7 +966,6 @@ function formatBotTelegram(res, live) {
     fmtTgLeg("Pinnacle", res.pinnacle),
     res.token ? "token: " + escHtml(res.token) : null,
     new Date().toLocaleString(),
-    "<code>" + escHtml(JSON.stringify(res)) + "</code>", // полный лог как есть
   ].filter(Boolean);
   return lines.join("\n");
 }
