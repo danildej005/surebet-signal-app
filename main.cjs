@@ -793,9 +793,14 @@ async function findVilka(skip = []) {
     return await surebetWin.webContents.executeJavaScript(`(() => {
       const SKIP = ${JSON.stringify(skip)};
       let records = 0, pairs = 0, fresh = 0, hit = null; // счётчики для «пульса» (почему бот простаивает)
+      const sample = []; // диагностика «0 пар»: реальные метки БК первых записей фида
       for (const tb of document.querySelectorAll('tbody.surebet_record')) {
         records++;
-        const books = [...tb.querySelectorAll('[data-testid="surebet-leg-bookmaker"]')].map((e) => (e.innerText || '').trim());
+        let books = [...tb.querySelectorAll('[data-testid="surebet-leg-bookmaker"]')].map((e) => (e.innerText || '').trim());
+        if (!books.length) { // запасной способ, если data-testid сменился: метки БК по ссылкам контор
+          books = [...tb.querySelectorAll('a[href*="/bookmakers/"], a[href*="/booker"], [class*=bookmaker]')].map((e) => (e.innerText || '').trim()).filter(Boolean);
+        }
+        if (sample.length < 8) sample.push(books.length ? books.join(' + ') : '(нет меток БК)');
         const byProng = {}; let token = '';
         tb.querySelectorAll('a[href*="/nav/surebet/prong/"]').forEach((a) => {
           const m = (a.getAttribute('href') || a.href || '').match(/\\/prong\\/(\\d+)\\/([^/]+)/);
@@ -805,16 +810,16 @@ async function findVilka(skip = []) {
         books.forEach((nm, i) => {
           const low = nm.toLowerCase();
           if (/betano/.test(low) && bi < 0) bi = i;
-          else if (/pinnacle/.test(low) && /delayed/.test(low) && pi < 0) pi = i;
+          else if (/pinnacle|ps3838/.test(low) && pi < 0) pi = i; // любой Pinnacle (Pinnacle888 / Pinnacle (Delayed) / ps3838)
         });
-        if (!(bi >= 0 && pi >= 0 && byProng[bi] && byProng[pi])) continue; // не пара Betano+Pinnacle(Delayed)
+        if (!(bi >= 0 && pi >= 0 && byProng[bi] && byProng[pi])) continue; // не пара Betano+Pinnacle
         pairs++;
         if (token && SKIP.indexOf(token) >= 0) continue; // уже пробованная
         fresh++;
         if (!hit) hit = { token, betano: { name: books[bi], prong: bi }, pinnacle: { name: books[pi], prong: pi } };
       }
-      if (hit) return { ok: true, records, pairs, fresh, token: hit.token, betano: hit.betano, pinnacle: hit.pinnacle };
-      return { ok: false, records, pairs, fresh };
+      if (hit) return { ok: true, records, pairs, fresh, sample, token: hit.token, betano: hit.betano, pinnacle: hit.pinnacle };
+      return { ok: false, records, pairs, fresh, sample };
     })()`);
   } catch (e) { return { ok: false, error: "чтение сканера: " + e.message }; }
 }
@@ -985,7 +990,11 @@ async function runOneBotCycle(live = false) {
       const now = Date.now();
       if (now - lastBotHeartbeat > 55000) {
         lastBotHeartbeat = now;
-        logger.log("INFO", "[бот] жив, жду вилку: в фиде", v.records || 0, "записей | годных пар Betano+Pinnacle(Delayed):", v.pairs || 0, "| новых (не пробованных):", v.fresh || 0, "| уже пробовано:", triedVilkas.size);
+        logger.log("INFO", "[бот] жив, жду вилку: в фиде", v.records || 0, "записей | годных пар Betano+Pinnacle:", v.pairs || 0, "| новых (не пробованных):", v.fresh || 0, "| уже пробовано:", triedVilkas.size);
+        // ДИАГНОСТИКА: есть записи, но 0 пар → показать реальные метки БК первых записей (понять, почему не матчатся)
+        if ((v.pairs || 0) === 0 && (v.records || 0) > 0 && v.sample && v.sample.length) {
+          logger.log("INFO", "  [диаг фид] метки БК записей:", JSON.stringify(v.sample));
+        }
       }
       return null; // нет НОВОЙ подходящей вилки — ждём следующий тик
     }
