@@ -24,14 +24,15 @@ const PINN = withIndex([
   { id: "0", text: "MATCH" },
 ]);
 
-test("Pinnacle: фора Ф1(+1.5) @1.543 → Shimabukuro +1.5 (не Kyrgios +1.5)", () => {
-  const r = pickOutcome({ desc: "Ф1(+1.5)", expectedOdds: 1.543, buttons: PINN });
+test("Pinnacle: фора Ф1(+1.5) @1.543 → Shimabukuro +1.5 (имя приклеено из мани-лайна по id-стороне)", () => {
+  // имя команды у Pinnacle-форы берётся из мани-лайна той же стороны (id …|2|СТОРОНА|…) и подтверждается
+  const r = pickOutcome({ desc: "Ф1(+1.5)", expectedOdds: 1.543, buttons: PINN, eventUrl: SLUG_T });
   assert.strictEqual(r.id, "1631805342|0|2|0|0|+1.5");
   assert.strictEqual(r.odds, 1.543);
-  assert.strictEqual(r.how, "desc");
+  assert.strictEqual(r.how, "name");
 });
-test("Pinnacle: фора Ф2(-1.5) @2.560 → -1.5 2.560", () => {
-  assert.strictEqual(pickOutcome({ desc: "Ф2(-1.5)", expectedOdds: 2.56, buttons: PINN }).id, "1631805342|0|2|1|0|-1.5");
+test("Pinnacle: фора Ф2(-1.5) @2.560 → Kyrgios -1.5 (подтверждено именем, не Shimabukuro -1.5)", () => {
+  assert.strictEqual(pickOutcome({ desc: "Ф2(-1.5)", expectedOdds: 2.56, buttons: PINN, eventUrl: SLUG_T }).id, "1631805342|0|2|1|0|-1.5");
 });
 test("Pinnacle: Тм(2.5) @1.546 → Under 2.5", () => {
   const r = pickOutcome({ desc: "Тм(2.5)", expectedOdds: 1.546, buttons: PINN });
@@ -40,11 +41,11 @@ test("Pinnacle: Тм(2.5) @1.546 → Under 2.5", () => {
 test("Pinnacle: Тб(2.5) @2.550 → Over 2.5", () => {
   assert.match(pickOutcome({ desc: "Тб(2.5)", expectedOdds: 2.55, buttons: PINN }).text, /Over/);
 });
-test("Pinnacle: П1 @2.230 → Shimabukuro", () => {
-  assert.strictEqual(pickOutcome({ desc: "П1", expectedOdds: 2.23, buttons: PINN }).id, "1631805342|0|1|0|0|0");
+test("Pinnacle: П1 @2.230 → Shimabukuro (подтверждено именем)", () => {
+  assert.strictEqual(pickOutcome({ desc: "П1", expectedOdds: 2.23, buttons: PINN, eventUrl: SLUG_T }).id, "1631805342|0|1|0|0|0");
 });
-test("Pinnacle: П2 @1.709 → Kyrgios", () => {
-  assert.strictEqual(pickOutcome({ desc: "П2", expectedOdds: 1.709, buttons: PINN }).id, "1631805342|0|1|1|0|0");
+test("Pinnacle: П2 @1.709 → Kyrgios (подтверждено именем)", () => {
+  assert.strictEqual(pickOutcome({ desc: "П2", expectedOdds: 1.709, buttons: PINN, eventUrl: SLUG_T }).id, "1631805342|0|1|1|0|0");
 });
 test("Pinnacle: точный путь по id из вилки (другой префикс события)", () => {
   const r = pickOutcome({ desc: "", expectedOdds: 0, outcomeId: "999999|0|2|0|0|+1.5", buttons: PINN });
@@ -66,12 +67,12 @@ const BET = withIndex([
 ]);
 
 test("Betano: фора Ф2(-1.5) @1.82 → Nick Kyrgios -1.5 1.82", () => {
-  const r = pickOutcome({ desc: "Ф2(-1.5)", expectedOdds: 1.82, buttons: BET });
+  const r = pickOutcome({ desc: "Ф2(-1.5)", expectedOdds: 1.82, buttons: BET, eventUrl: SLUG_T });
   assert.strictEqual(r.text, "Nick Kyrgios -1.5 1.82");
   assert.strictEqual(r.odds, 1.82);
 });
 test("Betano: фора Ф1(+1.5) @1.72 → Sho Shimabukuro +1.5 1.72", () => {
-  assert.strictEqual(pickOutcome({ desc: "Ф1(+1.5)", expectedOdds: 1.72, buttons: BET }).text, "Sho Shimabukuro +1.5 1.72");
+  assert.strictEqual(pickOutcome({ desc: "Ф1(+1.5)", expectedOdds: 1.72, buttons: BET, eventUrl: SLUG_T }).text, "Sho Shimabukuro +1.5 1.72");
 });
 test("Betano: Тм(22.5) @2.10 → Under 22.5 2.10 (не победа Shimabukuro 2.10)", () => {
   const r = pickOutcome({ desc: "Тм(22.5)", expectedOdds: 2.10, buttons: BET });
@@ -81,15 +82,15 @@ test("Betano: Тб(22.5) @1.53 → Over 22.5 1.53", () => {
   assert.strictEqual(pickOutcome({ desc: "Тб(22.5)", expectedOdds: 1.53, buttons: BET }).text, "Over 22.5 1.53");
 });
 test("Betano: П1 @2.10 → Shimabukuro (НЕ Under 22.5 с тем же кэфом 2.10)", () => {
-  const r = pickOutcome({ desc: "П1", expectedOdds: 2.10, buttons: BET });
+  const r = pickOutcome({ desc: "П1", expectedOdds: 2.10, buttons: BET, eventUrl: SLUG_T });
   assert.strictEqual(r.text, "Sho Shimabukuro 2.10");
 });
 test("Betano: П2 @1.72 → Nick Kyrgios 1.72 (не фора +1.5 с кэфом 1.72)", () => {
-  const r = pickOutcome({ desc: "П2", expectedOdds: 1.72, buttons: BET });
+  const r = pickOutcome({ desc: "П2", expectedOdds: 1.72, buttons: BET, eventUrl: SLUG_T });
   assert.strictEqual(r.text, "Nick Kyrgios 1.72");
 });
 test("выбранная кнопка несёт индекс i для клика", () => {
-  const r = pickOutcome({ desc: "Ф2(-1.5)", expectedOdds: 1.82, buttons: BET });
+  const r = pickOutcome({ desc: "Ф2(-1.5)", expectedOdds: 1.82, buttons: BET, eventUrl: SLUG_T });
   assert.strictEqual(typeof r.i, "number");
   assert.strictEqual(BET[r.i].text, "Nick Kyrgios -1.5 1.82");
 });
@@ -153,14 +154,37 @@ test("англ-тотал «Over 7.5» → кнопка «Over 7.5 1.95» (не 
   assert.strictEqual(r.i, 0);
 });
 
-test("англ-фора «AH1(+1.5)» → кнопка «+1.5 1.66» по знаку+линии", () => {
+test("Pinnacle-фора без имени и без id → отказ (нельзя подтвердить команду, по кэфу не угадываем)", () => {
   const buttons = [
     { i: 0, id: "", text: "+1.5 1.66" },
     { i: 1, id: "", text: "-1.5 2.20" },
   ];
-  const r = pickOutcome({ desc: "AH1(+1.5)", expectedOdds: 1.66, buttons });
-  assert.ok(r, "должен найти исход");
-  assert.strictEqual(r.i, 0);
+  assert.strictEqual(pickOutcome({ desc: "AH1(+1.5)", expectedOdds: 1.66, buttons }), null);
+});
+test("Pinnacle-фора: имя приклеено из мани-лайна по id-стороне → берём +1.5 НУЖНОЙ команды", () => {
+  const buttons = withIndex([
+    { id: "999|0|1|0|0|0", text: "Fukuoka Hawks 1.95" },       // мани-лайн side0
+    { id: "999|0|1|1|0|0", text: "Hokkaido Fighters 1.85" },   // мани-лайн side1
+    { id: "999|0|2|0|0|+1.5", text: "+1.5 1.66" },              // фора side0 → Fukuoka
+    { id: "999|0|2|1|0|-1.5", text: "-1.5 2.20" },              // фора side1 → Hokkaido
+  ]);
+  const url = "https://www.pinnacle888.com/en/standard/baseball/npb/fukuoka-hawks-hokkaido-fighters/999";
+  const r = pickOutcome({ desc: "AH1(+1.5)", expectedOdds: 1.66, buttons, eventUrl: url });
+  assert.ok(r, "должен подтвердить команду по имени из мани-лайна");
+  assert.strictEqual(r.id, "999|0|2|0|0|+1.5");
+  assert.strictEqual(r.team, "Fukuoka Hawks");
+  assert.strictEqual(r.how, "name");
+});
+test("Pinnacle-фора: нужной команды среди +1.5 нет (только чужая) → отказ (защита от ставки на ту же команду)", () => {
+  const buttons = withIndex([
+    { id: "999|0|1|0|0|0", text: "Fukuoka Hawks 1.95" },
+    { id: "999|0|1|1|0|0", text: "Hokkaido Fighters 1.85" },
+    { id: "999|0|2|1|0|+1.5", text: "+1.5 1.66" },   // +1.5 принадлежит Hokkaido (side1)
+    { id: "999|0|2|0|0|-1.5", text: "-1.5 2.20" },   // -1.5 у Fukuoka (side0)
+  ]);
+  const url = "https://www.pinnacle888.com/en/standard/baseball/npb/fukuoka-hawks-hokkaido-fighters/999";
+  // просят Fukuoka +1.5, но на странице +1.5 = Hokkaido → подтвердить Fukuoka нельзя → отказ (не берём Hokkaido)
+  assert.strictEqual(pickOutcome({ desc: "AH1(+1.5)", subject: "Fukuoka Hawks", expectedOdds: 1.66, buttons, eventUrl: url }), null);
 });
 
 // ── ДВОЙНОЙ ШАНС / составные исходы (1X/X2/12) vs одиночная победа ────────────
@@ -227,8 +251,8 @@ test("Betano: Ф1(−1.5) сеты @3.60 → счёт «2 - 0»", () => {
   const r = pickOutcome({ desc: "Ф1(-1.5)", expectedOdds: 3.60, buttons: BET, eventUrl: SLUG_T, unit: "set" });
   assert.strictEqual(r.text, "2 - 0 3.60");
 });
-test("Pinnacle: Ф2(−1.5) сеты — остаётся форой по кэфу (счёта на странице нет)", () => {
-  // в PINN счёта нет, но есть -1.5 @2.560 → берётся фора
+test("Pinnacle: Ф2(−1.5) сеты — берётся фора Kyrgios (счёта на странице нет, имя из мани-лайна)", () => {
+  // в PINN счёта нет, но есть -1.5 @2.560 у Kyrgios (side1) → подтверждаем по имени из мани-лайна
   const r = pickOutcome({ desc: "Ф2(-1.5)", expectedOdds: 2.560, buttons: PINN, eventUrl: "https://www.pinnacle888.com/en/standard/tennis/x/sho-shimabukuro-vs-nick-kyrgios/1631805342", unit: "set" });
   assert.strictEqual(r.id, "1631805342|0|2|1|0|-1.5");
 });
@@ -309,11 +333,12 @@ test("Ф1(−1.5) subject=Milwaukee, но Milwaukee -1.5 НЕТ на стран�
   assert.strictEqual(r, null);
 });
 
-test("Pinnacle фора (имени на кнопке нет) — остаётся выбор по кэфу", () => {
-  // у Pinnacle кнопки «+1.5 1.543» без имени → имя не применяется, работает кэф
+test("Pinnacle фора (имени на кнопке нет) — имя из мани-лайна по id-стороне, подтверждено", () => {
+  // у Pinnacle кнопки «+1.5 1.543» без имени → имя приклеиваем из мани-лайна той же стороны (id …|2|0|…) → name
   const r = pickOutcome({ desc: "Ф1(+1.5)", expectedOdds: 1.543, buttons: PINN, eventUrl: "https://www.pinnacle888.com/en/standard/tennis/x/sho-shimabukuro-vs-nick-kyrgios/1631805342" });
   assert.strictEqual(r.id, "1631805342|0|2|0|0|+1.5");
-  assert.strictEqual(r.how, "desc");
+  assert.strictEqual(r.team, "Sho Shimabukuro");
+  assert.strictEqual(r.how, "name");
 });
 
 // ── Доп-рынок «X 1-2» (нет ничьи / DNB): для 2-исходных видов = победитель ─────

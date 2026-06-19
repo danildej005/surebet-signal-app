@@ -614,7 +614,10 @@ async function selectLegOutcome(id) {
       try { logger.log("INFO", "  [диаг " + id + "] исход не подошёл; descFull=" + (bet.descFull || bet.desc || "—") + " | видел кнопок: " + JSON.stringify(buttons.slice(0, 50).map((b) => b.text).filter(Boolean))); } catch { /* ignore */ }
       return { ok: false, win, cfg, bet, error: "не нашёл исход (линия/кэф). desc=" + (bet.desc || "—") + " кэф=" + (bet.expectedOdds || "?") + " кнопок:" + buttons.length };
     }
-    selected = choice.text; selectedOdds = choice.odds; how = choice.how; pickedIndex = choice.i;
+    // имя команды приклеиваем к тексту выбора (у Pinnacle-форы его в кнопке нет) — чтобы кросс-защита
+    // «одна сторона на обоих плечах» и лог видели КОМАНДУ, а не только «+1.5 1.632».
+    selected = (choice.team && !choice.text.toLowerCase().includes(choice.team.toLowerCase()) ? choice.team + " " : "") + choice.text;
+    selectedOdds = choice.odds; how = choice.how; pickedIndex = choice.i;
     try {
       const clicked = await win.webContents.executeJavaScript(`(() => { const els = [...document.querySelectorAll(${JSON.stringify(sel)})]; const el = els[${Number(choice.i)}]; if (el) { el.click(); return true; } return false; })()`);
       if (!clicked) return { ok: false, win, cfg, bet, selected, selectedOdds, how, error: "кнопка исхода не кликнулась (i=" + choice.i + ")" };
