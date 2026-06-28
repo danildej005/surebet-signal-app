@@ -607,7 +607,7 @@ async function selectLegOutcome(id) {
       })()`);
     } catch (e) { return { ok: false, win, cfg, bet, error: "не прочитал кнопки исходов: " + e.message }; }
     let eventUrl = ""; try { eventUrl = win.webContents.getURL(); } catch { /* ignore */ }
-    const choice = pickOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons, eventUrl, unit, subject: extractSubject(bet.descFull) });
+    const choice = pickOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons, eventUrl, unit, subject: bet.subject || extractSubject(bet.descFull) });
     if (!choice) {
       // ДИАГНОСТИКА доп-рынков: дампим реальные подписи кнопок, что бот видел — чтобы потом
       // прицельно научить pickOutcome этим рынкам (карточки/угловые/сет-тайм/DNB/esports и т.п.).
