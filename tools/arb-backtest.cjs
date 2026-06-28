@@ -29,7 +29,13 @@ function resultsOf(se) { const out = {}; for (const [mid, mv] of Object.entries(
 
 (async () => {
   const cat = api.catalogFromMarkets(await api.markets(sportId, KEY));
-  const fx = api.asList(await api.fixtures(sportId, from, to, KEY)).filter((f) => f.statusName === "Finished");
+  const addDays = (s, n) => { const d = new Date(s + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  let fxAll = []; // fixtures эндпоинт требует диапазон <10 дней → берём кусками по 9
+  for (let cur = from; cur <= to; cur = addDays(cur, 9)) {
+    const end = addDays(cur, 8) < to ? addDays(cur, 8) : to;
+    fxAll = fxAll.concat(api.asList(await api.fixtures(sportId, cur, end, KEY)));
+  }
+  const fx = fxAll.filter((f) => f.statusName === "Finished");
   const startMap = new Map(fx.map((f) => [f.fixtureId, Date.parse(f.startTime)]));
 
   const legBets = []; // {odds, win} — ноги Betano из вилок
