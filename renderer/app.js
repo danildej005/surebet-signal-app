@@ -32,15 +32,19 @@ function renderStatus(s) {
     valueInit = true;
     const v = s.settings;
     $("valueRefSource").value = v.valueRefSource || "ps3838";
-    $("valueSport").value = (v.valueSportId || "10") + ":" + (v.valuePsSportId || "29");
-    $("valueTournaments").value = v.valueTournaments || "";
-    $("valueThreshold").value = ((v.valueThreshold != null ? v.valueThreshold : 0.05) * 100);
+    fillSelect("valueThreshold", [2, 3, 5, 7, 10].map((p) => ({ val: p, txt: p + "%" })), Math.round((v.valueThreshold != null ? v.valueThreshold : 0.05) * 100));
+    fillSelect("valueOddsMin", [{ val: 0, txt: "без границы" }].concat([1.3, 1.5, 1.7, 2.0].map((o) => ({ val: o, txt: String(o) }))), v.valueOddsMin || 0);
+    fillSelect("valueOddsMax", [{ val: 0, txt: "без границы" }].concat([3, 5, 7, 10].map((o) => ({ val: o, txt: String(o) }))), v.valueOddsMax || 0);
     if (v.valueStake) $("valueStake").value = v.valueStake;
     $("valueMaxPerDay").value = v.valueMaxPerDay != null ? v.valueMaxPerDay : 20;
     $("valueMode").checked = !!v.valueMode;
     $("valueLive").checked = !!v.valueLive;
     $("oddsApiKey").placeholder = v.hasOddsApiKey ? "ключ задан — пусто = не менять" : "вставь ключ";
     $("ps3838Auth").placeholder = v.hasPs3838 ? "задано — пусто = не менять" : "login:pass";
+    valueSportsState = (v.valueSports && v.valueSports.length) ? v.valueSports.map((x) => ({ ...x })) : [];
+    valueMarketsState = Array.isArray(v.valueMarkets) ? v.valueMarkets.slice() : [];
+    renderValueSports();
+    renderValueMarkets();
   }
 }
 let vilkaLimitInit = false; // лимит вилки в поле инициализирован (заполняем только раз)
@@ -57,7 +61,7 @@ async function refresh() { renderStatus(await window.api.getStatus()); }
 
 window.api.onStatus(renderStatus);
 
-$("openSurebet").onclick = () => window.api.openSurebet();
+if ($("openSurebet")) $("openSurebet").onclick = () => window.api.openSurebet();
 $("openLogs").onclick = () => window.api.openLogs();
 $("liveMode").onchange = () => { window.api.saveSettings({ liveMode: $("liveMode").checked }); setBotBtn(botArmedUi); };
 
@@ -94,19 +98,61 @@ if ($("tgTest")) $("tgTest").onclick = async () => {
   } catch (e) { $("tgResult").textContent = "⚠️ " + e.message; }
 };
 
-// ── Value-режим: сохранение настроек (секреты — только если введены) ──────────
+// ── Value-режим: спорты/маркеты галочками, пороги/кэф списками ────────────────
+const MARKET_GROUPS = [
+  ["Исход (1X2 / мани-лайн)", ["1x2", "moneyline"]],
+  ["Тоталы", ["totals"]],
+  ["Форы (азиатские)", ["spreads"]],
+  ["DNB (без ничьи)", ["drawnobet"]],
+  ["Двойной шанс", ["doublechance"]],
+];
+let valueSportsState = [];   // [{key,name,oa,ps,on,leagues}]
+let valueMarketsState = [];  // [marketType,…]
+
+function fillSelect(id, items, cur) {
+  const s = $(id); if (!s) return;
+  s.innerHTML = "";
+  items.forEach((it) => { const o = el("option", { value: String(it.val), textContent: it.txt }); if (String(it.val) === String(cur)) o.selected = true; s.append(o); });
+}
+function renderValueSports() {
+  const root = $("valueSports"); if (!root) return;
+  root.innerHTML = "";
+  valueSportsState.forEach((sp) => {
+    const cb = el("input", { type: "checkbox", checked: !!sp.on }); cb.style.width = "auto";
+    cb.onchange = () => { sp.on = cb.checked; };
+    const lg = el("input", { type: "text", value: sp.leagues || "", placeholder: "id лиг, напр. 16,7" });
+    lg.oninput = () => { sp.leagues = lg.value; };
+    root.append(el("div", { className: "row", style: "gap:6px; align-items:center; margin:3px 0;" }, [
+      cb, el("span", { textContent: sp.name, style: "flex:0 0 160px;" }), lg,
+    ]));
+  });
+}
+function renderValueMarkets() {
+  const root = $("valueMarkets"); if (!root) return;
+  root.innerHTML = "";
+  MARKET_GROUPS.forEach(([label, types]) => {
+    const on = types.every((t) => valueMarketsState.includes(t));
+    const cb = el("input", { type: "checkbox", checked: on }); cb.style.width = "auto";
+    cb.onchange = () => {
+      valueMarketsState = valueMarketsState.filter((t) => !types.includes(t));
+      if (cb.checked) types.forEach((t) => valueMarketsState.push(t));
+    };
+    root.append(el("label", { className: "muted", style: "display:flex; align-items:center; gap:6px; margin:2px 0;" }, [cb, el("span", { textContent: " " + label })]));
+  });
+}
+
 function saveValue() {
-  const sp = ($("valueSport").value || "10:29").split(":");
-  const thrRaw = $("valueThreshold").value.trim();
   const patch = {
     valueRefSource: $("valueRefSource").value,
-    valueSportId: sp[0], valuePsSportId: sp[1] || "29",
-    valueTournaments: $("valueTournaments").value.trim(),
-    valueThreshold: (thrRaw === "" ? 5 : Number(thrRaw)) / 100,
+    valueThreshold: (Number($("valueThreshold").value) || 5) / 100,
     valueStake: Number($("valueStake").value) || 0,
     valueMaxPerDay: Number($("valueMaxPerDay").value) || 0,
+    valueOddsMin: Number($("valueOddsMin").value) || 0,
+    valueOddsMax: Number($("valueOddsMax").value) || 0,
     valueMode: $("valueMode").checked,
     valueLive: $("valueLive").checked,
+    valueSports: valueSportsState.map((s) => ({ key: s.key, name: s.name, oa: s.oa, ps: s.ps, on: !!s.on, leagues: (s.leagues || "").trim() })),
+    valueMarkets: valueMarketsState.slice(),
   };
   const k = $("oddsApiKey").value.trim(); if (k) patch.oddsApiKey = k;
   const a = $("ps3838Auth").value.trim(); if (a) patch.ps3838Auth = a;
@@ -379,7 +425,7 @@ async function renderBookers() {
   root.append(el("button", { textContent: "Сохранить конторы", onclick: async () => { await window.api.saveBookers(bookersCache); $("saveHint").textContent = "✅ конторы сохранены"; } }));
 }
 renderBookers();
-$("logout").onclick = async () => { await window.api.logoutSurebet(); };
+if ($("logout")) $("logout").onclick = async () => { await window.api.logoutSurebet(); };
 $("toggleRun").onclick = async () => {
   const s = await window.api.getStatus();
   await window.api.setRunning(!s.running);

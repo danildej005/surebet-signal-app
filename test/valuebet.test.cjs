@@ -75,6 +75,25 @@ test("candidatesVsPinnacleFair: эталон ps3838 (честные вер-ти)
   assert.ok(c.some((x) => x.desc === "Тб(8.5)"));
 });
 
+test("candidatesVsPinnacleFair: фильтр маркетов и диапазона кэфа", () => {
+  const cat = new Map([
+    ["101", { marketType: "1x2", period: "fulltime", marketLength: 3, outcomes: [{ outcomeId: 101, outcomeName: "1" }, { outcomeId: 102, outcomeName: "X" }, { outcomeId: 103, outcomeName: "2" }] }],
+    ["116", { marketType: "totals", period: "result", marketLength: 2, handicap: 8.5, outcomes: [{ outcomeId: 116, outcomeName: "Over" }, { outcomeId: 117, outcomeName: "Under" }] }],
+  ]);
+  const fair = { ml: { home: 0.6, draw: 0.25, away: 0.15 }, tot: { "8.5": { over: 0.5, under: 0.5 } }, ah: {} };
+  const px = (oid, p) => ({ [oid]: { players: { "0": { price: p, active: true } } } });
+  const betFx = { bookmakerOdds: { betano: { bookmakerFixtureId: "555", markets: {
+    "101": { outcomes: { ...px(101, 1.8), ...px(102, 4.0), ...px(103, 1.2) } }, // home 1.8 → +8%
+    "116": { outcomes: { ...px(116, 2.1), ...px(117, 1.7) } },                  // over 2.1 → +5%
+  } } } };
+  // только тоталы → 1x2 home отсекается типом рынка
+  let c = candidatesVsPinnacleFair(betFx, fair, cat, "A", "B", "555", { threshold: 0.05, markets: ["totals"] });
+  assert.ok(c.length === 1 && c[0].desc === "Тб(8.5)");
+  // кэф от 2.0 → home@1.8 отсекается, остаётся over@2.1
+  c = candidatesVsPinnacleFair(betFx, fair, cat, "A", "B", "555", { threshold: 0.05, oddsMin: 2.0 });
+  assert.ok(c.every((x) => x.expectedOdds >= 2.0) && c.some((x) => x.desc === "Тб(8.5)"));
+});
+
 test("scanCandidates: джойн по fixtureId + имена + сортировка по value", () => {
   const pinIndex = new Map([["A", pinFx]]);
   const betIndex = new Map([["A", betFx], ["B", betFx]]); // B нет у Pinnacle → пропуск

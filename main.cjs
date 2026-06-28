@@ -16,7 +16,7 @@ const { defaultBookers, emptyProxy, buildProxyString, betanoTarget, localizeBeta
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 const fx = require("./lib/fx.cjs");
 const { parseMoney, vilkaStakes } = require("./lib/vilka.cjs");
-const { scanOnce, scanOnceVsPs3838 } = require("./lib/valuescanner.cjs"); // value-режим: сканеры (эталон oddspapi / ps3838)
+const { scanAll } = require("./lib/valuescanner.cjs"); // value-режим: мультиспорт-сканер (эталон ps3838 / oddspapi)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -1167,11 +1167,15 @@ async function valueScanAndPlace(live) {
     const today = new Date().toISOString().slice(0, 10);
     if (valueDay !== today) { valueDay = today; valueCount = 0; }
     if (valueCount >= (Number(settings.valueMaxPerDay) || 0)) { logger.log("INFO", "[value] лимит ставок/сутки достигнут (" + valueCount + ")"); return; }
-    const threshold = Number(settings.valueThreshold) || 0.05, stake = Number(settings.valueStake) || 0;
-    // Эталон Pinnacle: ps3838 (прямой, по умолч.) или oddspapi. Betano всегда из oddspapi.
-    const cands = settings.valueRefSource === "ps3838"
-      ? await scanOnceVsPs3838(settings.oddsApiKey, settings.ps3838Auth, { sportId: settings.valueSportId, psSportId: settings.valuePsSportId, tournamentIds: settings.valueTournaments, threshold, stake })
-      : await scanOnce(settings.oddsApiKey, { sportId: settings.valueSportId, tournamentIds: settings.valueTournaments, threshold, stake });
+    const cands = await scanAll(settings.oddsApiKey, settings.ps3838Auth, {
+      sports: settings.valueSports || [],
+      refSource: settings.valueRefSource || "ps3838",
+      threshold: Number(settings.valueThreshold) || 0.05,
+      stake: Number(settings.valueStake) || 0,
+      markets: settings.valueMarkets || [],
+      oddsMin: Number(settings.valueOddsMin) || 0,
+      oddsMax: Number(settings.valueOddsMax) || 0,
+    });
     const fresh = cands.filter((c) => !triedValue.has(c.eventId + "|" + c.marketId + "|" + c.outcomeId));
     logger.log("INFO", "[value] кандидатов: " + cands.length + " | новых: " + fresh.length + (cands[0] ? " | топ +" + (cands[0].valuePct * 100).toFixed(1) + "%" : ""));
     if (!fresh.length) return;
@@ -1304,13 +1308,14 @@ function maskedSettings() {
     oddsApiKey: settings.oddsApiKey ? settings.oddsApiKey.slice(0, 6) + "…" : "",
     valueMode: !!settings.valueMode,
     valueLive: !!settings.valueLive,
-    valueSportId: settings.valueSportId || "10",
-    valueTournaments: settings.valueTournaments || "",
     valueThreshold: settings.valueThreshold != null ? settings.valueThreshold : 0.05,
     valueStake: settings.valueStake || 0,
     valueMaxPerDay: settings.valueMaxPerDay != null ? settings.valueMaxPerDay : 20,
     valueRefSource: settings.valueRefSource || "ps3838",
-    valuePsSportId: settings.valuePsSportId || "29",
+    valueOddsMin: settings.valueOddsMin || 0,
+    valueOddsMax: settings.valueOddsMax || 0,
+    valueSports: settings.valueSports || [],
+    valueMarkets: settings.valueMarkets || [],
     hasPs3838: !!settings.ps3838Auth,
   };
 }
@@ -1608,14 +1613,15 @@ ipcMain.handle("save-settings", (_e, patch) => {
   if (typeof patch.oddsApiKey === "string" && patch.oddsApiKey.trim()) clean.oddsApiKey = patch.oddsApiKey.trim();
   if (typeof patch.valueMode === "boolean") clean.valueMode = patch.valueMode;
   if (typeof patch.valueLive === "boolean") clean.valueLive = patch.valueLive;
-  if (patch.valueSportId !== undefined) clean.valueSportId = String(patch.valueSportId).trim();
-  if (typeof patch.valueTournaments === "string") clean.valueTournaments = patch.valueTournaments.trim();
+  if (Array.isArray(patch.valueSports)) clean.valueSports = patch.valueSports.map((s) => ({ key: String(s.key || ""), name: String(s.name || ""), oa: String(s.oa || ""), ps: String(s.ps || ""), on: !!s.on, leagues: String(s.leagues || "").trim() }));
+  if (Array.isArray(patch.valueMarkets)) clean.valueMarkets = patch.valueMarkets.map((m) => String(m));
+  if (patch.valueOddsMin !== undefined) clean.valueOddsMin = Math.max(0, Number(patch.valueOddsMin) || 0);
+  if (patch.valueOddsMax !== undefined) clean.valueOddsMax = Math.max(0, Number(patch.valueOddsMax) || 0);
   if (patch.valueThreshold !== undefined) clean.valueThreshold = Math.max(0, Number(patch.valueThreshold) || 0.05);
   if (patch.valueStake !== undefined) clean.valueStake = Math.max(0, Number(patch.valueStake) || 0);
   if (patch.valueMaxPerDay !== undefined) clean.valueMaxPerDay = Math.max(0, Number(patch.valueMaxPerDay) || 0);
   if (patch.valueRefSource === "ps3838" || patch.valueRefSource === "oddspapi") clean.valueRefSource = patch.valueRefSource;
   if (typeof patch.ps3838Auth === "string" && patch.ps3838Auth.trim()) clean.ps3838Auth = patch.ps3838Auth.trim(); // секрет: пустой не затирает
-  if (patch.valuePsSportId !== undefined) clean.valuePsSportId = String(patch.valuePsSportId).trim();
   settings = settingsStore.save(clean);
   startupSent = false;
   startLoop();

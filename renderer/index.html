@@ -15,15 +15,6 @@
     <div class="err" id="lastError"></div>
   </section>
 
-  <section class="card">
-    <details>
-      <summary><b>Шаг 1. Вход в surebet</b></summary>
-      <p class="muted">Открой surebet, залогинься и выстави свой фильтр (Pinnacle, нужный порог дохода). Приложение следит ровно за тем, что видишь ты.</p>
-      <button id="openSurebet">Открыть surebet</button>
-      <button id="logout" class="ghost">Выйти из surebet</button>
-    </details>
-  </section>
-
   <div class="muted hint" id="saveHint"></div>
 
   <section class="card">
@@ -65,20 +56,21 @@
       </select>
     </label>
     <label>ps3838 логин:пароль (только чтение; нужно при эталоне ps3838)<input id="ps3838Auth" type="text" placeholder="login:pass" autocomplete="off" /></label>
-    <label>Спорт
-      <select id="valueSport">
-        <option value="10:29">Футбол</option>
-        <option value="13:3">Бейсбол</option>
-        <option value="12:33">Теннис</option>
-        <option value="11:4">Баскетбол</option>
-        <option value="15:19">Хоккей</option>
-        <option value="14:15">Американский футбол</option>
-      </select>
-    </label>
-    <label>Лиги (id через запятую)<input id="valueTournaments" type="text" placeholder="напр. 16,7,17 (max 5/запрос)" /></label>
+    <div class="subbox">
+      <div class="muted">Спорты — галочка = сканировать; впиши id лиг через запятую (max 5/запрос)</div>
+      <div id="valueSports"></div>
+    </div>
+    <div class="subbox">
+      <div class="muted">Маркеты — что ставим (сними галочку, чтобы исключить)</div>
+      <div id="valueMarkets"></div>
+    </div>
     <div class="grid2">
-      <label>Порог value, %<input id="valueThreshold" type="number" min="0" step="0.5" placeholder="5" /></label>
+      <label>Порог value<select id="valueThreshold"></select></label>
       <label>Ставка фикс (валюта Betano)<input id="valueStake" type="number" min="0" step="1" placeholder="напр. 10" /></label>
+    </div>
+    <div class="grid2">
+      <label>Кэф от<select id="valueOddsMin"></select></label>
+      <label>Кэф до<select id="valueOddsMax"></select></label>
     </div>
     <label>Лимит ставок в сутки<input id="valueMaxPerDay" type="number" min="0" step="1" placeholder="20" /></label>
     <label class="liverow"><input type="checkbox" id="valueMode" /> <b>Value-режим ВКЛ</b> — сканировать и ставить</label>
