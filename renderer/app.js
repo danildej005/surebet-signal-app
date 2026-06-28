@@ -27,9 +27,25 @@ function renderStatus(s) {
     if ($("tgKeyword") && s.settings.keyword) $("tgKeyword").value = s.settings.keyword;
     if ($("tgToken")) $("tgToken").placeholder = s.settings.hasToken ? "токен задан — оставь пустым, чтобы не менять" : "вставь токен бота";
   }
+  // Value-режим: заполняем поля ОДИН раз при загрузке (секреты — только placeholder).
+  if (!valueInit && s.settings && $("valueRefSource")) {
+    valueInit = true;
+    const v = s.settings;
+    $("valueRefSource").value = v.valueRefSource || "ps3838";
+    $("valueSport").value = (v.valueSportId || "10") + ":" + (v.valuePsSportId || "29");
+    $("valueTournaments").value = v.valueTournaments || "";
+    $("valueThreshold").value = ((v.valueThreshold != null ? v.valueThreshold : 0.05) * 100);
+    if (v.valueStake) $("valueStake").value = v.valueStake;
+    $("valueMaxPerDay").value = v.valueMaxPerDay != null ? v.valueMaxPerDay : 20;
+    $("valueMode").checked = !!v.valueMode;
+    $("valueLive").checked = !!v.valueLive;
+    $("oddsApiKey").placeholder = v.hasOddsApiKey ? "ключ задан — пусто = не менять" : "вставь ключ";
+    $("ps3838Auth").placeholder = v.hasPs3838 ? "задано — пусто = не менять" : "login:pass";
+  }
 }
 let vilkaLimitInit = false; // лимит вилки в поле инициализирован (заполняем только раз)
 let tgInit = false;         // Telegram-поля инициализированы (заполняем только раз)
+let valueInit = false;      // value-поля инициализированы (заполняем только раз)
 let botArmedUi = false;
 function setBotBtn(armed) {
   botArmedUi = armed;
@@ -77,6 +93,32 @@ if ($("tgTest")) $("tgTest").onclick = async () => {
     $("tgResult").textContent = (r && r.ok) ? "✅ тест отправлен — проверь Telegram" : "⚠️ " + ((r && r.error) || "ошибка");
   } catch (e) { $("tgResult").textContent = "⚠️ " + e.message; }
 };
+
+// ── Value-режим: сохранение настроек (секреты — только если введены) ──────────
+function saveValue() {
+  const sp = ($("valueSport").value || "10:29").split(":");
+  const thrRaw = $("valueThreshold").value.trim();
+  const patch = {
+    valueRefSource: $("valueRefSource").value,
+    valueSportId: sp[0], valuePsSportId: sp[1] || "29",
+    valueTournaments: $("valueTournaments").value.trim(),
+    valueThreshold: (thrRaw === "" ? 5 : Number(thrRaw)) / 100,
+    valueStake: Number($("valueStake").value) || 0,
+    valueMaxPerDay: Number($("valueMaxPerDay").value) || 0,
+    valueMode: $("valueMode").checked,
+    valueLive: $("valueLive").checked,
+  };
+  const k = $("oddsApiKey").value.trim(); if (k) patch.oddsApiKey = k;
+  const a = $("ps3838Auth").value.trim(); if (a) patch.ps3838Auth = a;
+  return window.api.saveSettings(patch).then(() => { $("oddsApiKey").value = ""; $("ps3838Auth").value = ""; });
+}
+if ($("valueSave")) $("valueSave").onclick = async () => {
+  try { await saveValue(); $("valueResult").textContent = "✅ сохранено"; }
+  catch (e) { $("valueResult").textContent = "⚠️ " + e.message; }
+};
+// тумблеры value сохраняем сразу (движок подхватит на следующем тике)
+if ($("valueMode")) $("valueMode").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valueMode").checked ? "🎯 value-режим ВКЛ" : "value-режим выкл"; }).catch((e) => { $("valueResult").textContent = "⚠️ " + e.message; });
+if ($("valueLive")) $("valueLive").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valueLive").checked ? "⚡ боевой ВКЛ" : "dry-run"; }).catch(() => {});
 
 function fmtLeg(name, l) {
   if (!l) return name + ": —";

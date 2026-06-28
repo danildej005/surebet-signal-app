@@ -54,6 +54,39 @@
     <div class="muted" id="lastSignal"></div>
   </section>
 
+  <section class="card" id="valueCard">
+    <h2>🎯 Value-режим (прематч)</h2>
+    <p class="muted">Эталон Pinnacle (снимаем маржу) vs Betano. Ставит ОДИНОЧКУ на betano.bg, когда Betano выгоднее честной линии на заданный порог. Включается тумблером ниже.</p>
+    <label>Ключ oddspapi<input id="oddsApiKey" type="text" placeholder="вставь ключ" autocomplete="off" /></label>
+    <label>Источник эталона Pinnacle
+      <select id="valueRefSource">
+        <option value="ps3838">ps3838 (прямой)</option>
+        <option value="oddspapi">oddspapi</option>
+      </select>
+    </label>
+    <label>ps3838 логин:пароль (только чтение; нужно при эталоне ps3838)<input id="ps3838Auth" type="text" placeholder="login:pass" autocomplete="off" /></label>
+    <label>Спорт
+      <select id="valueSport">
+        <option value="10:29">Футбол</option>
+        <option value="13:3">Бейсбол</option>
+        <option value="12:33">Теннис</option>
+        <option value="11:4">Баскетбол</option>
+        <option value="15:19">Хоккей</option>
+        <option value="14:15">Американский футбол</option>
+      </select>
+    </label>
+    <label>Лиги (id через запятую)<input id="valueTournaments" type="text" placeholder="напр. 16,7,17 (max 5/запрос)" /></label>
+    <div class="grid2">
+      <label>Порог value, %<input id="valueThreshold" type="number" min="0" step="0.5" placeholder="5" /></label>
+      <label>Ставка фикс (валюта Betano)<input id="valueStake" type="number" min="0" step="1" placeholder="напр. 10" /></label>
+    </div>
+    <label>Лимит ставок в сутки<input id="valueMaxPerDay" type="number" min="0" step="1" placeholder="20" /></label>
+    <label class="liverow"><input type="checkbox" id="valueMode" /> <b>Value-режим ВКЛ</b> — сканировать и ставить</label>
+    <label class="liverow"><input type="checkbox" id="valueLive" /> <b>⚡ Боевой</b> — реальные ставки (выкл = dry-run)</label>
+    <div class="row" style="margin-top:8px;"><button id="valueSave">Сохранить</button></div>
+    <div class="muted" id="valueResult"></div>
+  </section>
+
   <section class="card">
     <div class="row">
       <button id="toggleRun" class="ghost">Пауза / Возобновить</button>
