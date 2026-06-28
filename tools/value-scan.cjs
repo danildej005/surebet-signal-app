@@ -14,6 +14,7 @@ const KEY = fs.readFileSync(path.join(os.homedir(), ".oddspapi_key"), "utf8").tr
 const sportId = process.argv[2] || "10";
 const tournamentIds = process.argv[3] || "16,7,17,23,8";
 const threshold = Number(process.argv[4] || "0.02");
+const SOFT = process.argv[5] || "betano"; // контора, на которой ищем value (Betano/SBObet/…)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const slug = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
@@ -22,19 +23,19 @@ function dateStr(d) { return d.toISOString().slice(0, 10); }
 (async () => {
   const today = new Date();
   const to = new Date(today.getTime() + 9 * 864e5);
-  console.log(`sportId=${sportId} tournaments=${tournamentIds} threshold=${(threshold * 100).toFixed(1)}%\n`);
+  console.log(`sportId=${sportId} tournaments=${tournamentIds} порог=${(threshold * 100).toFixed(1)}% | контора=${SOFT}\n`);
 
   const cat = api.catalogFromMarkets(await api.markets(sportId, KEY));
   const fxIdx = api.indexByFixtureId(await api.fixtures(sportId, dateStr(today), dateStr(to), KEY));
   await sleep(600);
   const pinList = await api.oddsByTournaments("pinnacle", tournamentIds, KEY);
   await sleep(800);
-  const betList = await api.oddsByTournaments("betano", tournamentIds, KEY);
+  const betList = await api.oddsByTournaments(SOFT, tournamentIds, KEY);
 
   const pin = api.indexByFixtureId(pinList);
   const bet = api.indexByFixtureId(betList);
   const common = [...bet.keys()].filter((id) => pin.has(id));
-  console.log(`ПОКРЫТИЕ: Pinnacle=${pin.size} | Betano=${bet.size} | оба=${common.length}\n`);
+  console.log(`ПОКРЫТИЕ: Pinnacle=${pin.size} | ${SOFT}=${bet.size} | оба=${common.length}\n`);
 
   const label = (mid, oid) => {
     const m = cat.get(String(mid));
@@ -62,11 +63,11 @@ function dateStr(d) { return d.toISOString().slice(0, 10); }
   const cands = [];
   for (const id of common) {
     const pm = clean(api.outcomesByMarket(pin.get(id), "pinnacle"));
-    const bm = clean(api.outcomesByMarket(bet.get(id), "betano"));
+    const bm = clean(api.outcomesByMarket(bet.get(id), SOFT));
     for (const v of findValue(pm, bm, { threshold: -1 })) all.push(v.valuePct);
     for (const v of findValue(pm, bm, { threshold })) {
       const fx = fxIdx.get(id) || {};
-      const meta = api.bookmakerMeta(bet.get(id), "betano");
+      const meta = api.bookmakerMeta(bet.get(id), SOFT);
       const lab = label(v.marketId, v.outcomeId);
       cands.push({ ...v, id, p1: fx.participant1Name, p2: fx.participant2Name, eventId: meta.eventId, lab });
     }
@@ -83,10 +84,10 @@ function dateStr(d) { return d.toISOString().slice(0, 10); }
   cands.sort((a, b) => b.valuePct - a.valuePct);
   console.log(`\nКАНДИДАТОВ (value ≥ ${(threshold * 100).toFixed(1)}%): ${cands.length}. Топ-12:`);
   for (const c of cands.slice(0, 12)) {
-    const url = `https://www.betano.bg/koefitsienti/${slug((c.p1 || "") + "-" + (c.p2 || ""))}/${c.eventId}/`;
+    const url = SOFT === "betano" ? `https://www.betano.bg/koefitsienti/${slug((c.p1 || "") + "-" + (c.p2 || ""))}/${c.eventId}/` : `[${SOFT} eventId ${c.eventId}]`;
     const flag = c.lab.placeable ? "" : `  [${c.lab.period}/непростав.]`;
     console.log(`  +${(c.valuePct * 100).toFixed(1)}%  ${c.p1} vs ${c.p2}`);
-    console.log(`     ${c.lab.txt} | Betano ${c.bookOdds} vs честный ${c.fairOdds.toFixed(2)}${flag}`);
+    console.log(`     ${c.lab.txt} | ${SOFT} ${c.bookOdds} vs честный ${c.fairOdds.toFixed(2)}${flag}`);
     console.log(`     ${url}`);
   }
 })().catch((e) => { console.error("ОШИБКА:", e.message); process.exit(1); });
