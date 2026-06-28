@@ -14,7 +14,8 @@ const KEY = fs.readFileSync(path.join(os.homedir(), ".oddspapi_key"), "utf8").tr
 const sportId = process.argv[2] || "10";
 const tournamentIds = process.argv[3] || "16,7,17,23,8";
 const threshold = Number(process.argv[4] || "0.02");
-const SOFT = process.argv[5] || "betano"; // контора, на которой ищем value (Betano/SBObet/…)
+const SOFT = process.argv[5] || "betano"; // контора, на которой ищем value (ставим)
+const REF = process.argv[6] || "pinnacle"; // контора-ЭТАЛОН (де-виг → честная линия)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const slug = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
@@ -23,19 +24,19 @@ function dateStr(d) { return d.toISOString().slice(0, 10); }
 (async () => {
   const today = new Date();
   const to = new Date(today.getTime() + 9 * 864e5);
-  console.log(`sportId=${sportId} tournaments=${tournamentIds} порог=${(threshold * 100).toFixed(1)}% | контора=${SOFT}\n`);
+  console.log(`sportId=${sportId} tournaments=${tournamentIds} порог=${(threshold * 100).toFixed(1)}% | ставим=${SOFT} | эталон=${REF}\n`);
 
   const cat = api.catalogFromMarkets(await api.markets(sportId, KEY));
   const fxIdx = api.indexByFixtureId(await api.fixtures(sportId, dateStr(today), dateStr(to), KEY));
   await sleep(600);
-  const pinList = await api.oddsByTournaments("pinnacle", tournamentIds, KEY);
+  const pinList = await api.oddsByTournaments(REF, tournamentIds, KEY);
   await sleep(800);
   const betList = await api.oddsByTournaments(SOFT, tournamentIds, KEY);
 
   const pin = api.indexByFixtureId(pinList);
   const bet = api.indexByFixtureId(betList);
   const common = [...bet.keys()].filter((id) => pin.has(id));
-  console.log(`ПОКРЫТИЕ: Pinnacle=${pin.size} | ${SOFT}=${bet.size} | оба=${common.length}\n`);
+  console.log(`ПОКРЫТИЕ: ${REF}=${pin.size} | ${SOFT}=${bet.size} | оба=${common.length}\n`);
 
   const label = (mid, oid) => {
     const m = cat.get(String(mid));
@@ -62,7 +63,7 @@ function dateStr(d) { return d.toISOString().slice(0, 10); }
   const all = [];
   const cands = [];
   for (const id of common) {
-    const pm = clean(api.outcomesByMarket(pin.get(id), "pinnacle"));
+    const pm = clean(api.outcomesByMarket(pin.get(id), REF));
     const bm = clean(api.outcomesByMarket(bet.get(id), SOFT));
     for (const v of findValue(pm, bm, { threshold: -1 })) all.push(v.valuePct);
     for (const v of findValue(pm, bm, { threshold })) {
