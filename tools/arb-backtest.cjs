@@ -7,6 +7,7 @@
 // Запуск: node tools/arb-backtest.cjs <sportId> <from> <to>
 const fs = require("fs"); const os = require("os"); const path = require("path");
 const api = require("../lib/oddspapi.cjs");
+const { devigProportional } = require("../lib/value.cjs");
 
 const KEY = fs.readFileSync(path.join(os.homedir(), ".oddspapi_key"), "utf8").trim();
 const sportId = process.argv[2] || "13";
@@ -60,23 +61,30 @@ function resultsOf(se) { const out = {}; for (const [mid, mv] of Object.entries(
       for (const o of oids) { for (const s of (pin[mid][o] || [])) { const t = Date.parse(s.createdAt); if (t <= startMs) times.add(t); } for (const s of (bet[mid][o] || [])) { const t = Date.parse(s.createdAt); if (t <= startMs) times.add(t); } }
       const placed = {}; // oid → уже поставили ногу
       for (const t of [...times].sort((a, b) => a - b)) {
-        const best = {}, who = {};
+        const best = {}, who = {}, pp = {};
         let ok = true;
         for (const o of oids) {
-          const pp = pin[mid][o] ? stepAt(pin[mid][o], t) : null;
+          pp[o] = pin[mid][o] ? stepAt(pin[mid][o], t) : null;
           const bp = bet[mid][o] ? stepAt(bet[mid][o], t) : null;
-          if (!(pp > 1) && !(bp > 1)) { ok = false; break; }
-          best[o] = Math.max(pp || 0, bp || 0);
-          who[o] = (bp || 0) >= (pp || 0) ? "bet" : "pin";
+          if (!(pp[o] > 1) && !(bp > 1)) { ok = false; break; }
+          best[o] = Math.max(pp[o] || 0, bp || 0);
+          who[o] = (bp || 0) >= (pp[o] || 0) ? "bet" : "pin";
         }
         if (!ok) continue;
         const sumInv = oids.reduce((a, o) => a + 1 / best[o], 0);
         if (sumInv < 1) { // ВИЛКА
           arbCount++; arbProfitSum += (1 / sumInv - 1);
-          for (const o of oids) {
+          // value% ноги = кэф Betano × честная вер-ть (де-виг Pinnacle в этот же момент) − 1
+          const pinArr = oids.map((o) => pp[o]);
+          const probs = pinArr.every((x) => x > 1) ? devigProportional(pinArr) : null;
+          for (let i = 0; i < oids.length; i++) {
+            const o = oids[i];
             if (who[o] === "bet" && !placed[o]) {
               const r = res[mid][o];
-              if (r === "WIN" || r === "LOSE") { legBets.push({ odds: best[o], win: r === "WIN" }); placed[o] = true; }
+              if (r === "WIN" || r === "LOSE") {
+                const value = probs ? best[o] * probs[i] - 1 : null;
+                legBets.push({ odds: best[o], win: r === "WIN", value }); placed[o] = true;
+              }
             }
           }
         }
@@ -88,5 +96,14 @@ function resultsOf(se) { const out = {}; for (const [mid, mv] of Object.entries(
   const wr = (a) => a.length ? a.filter((x) => x.win).length / a.length : 0;
   console.log(`Матчей из кэша: ${matches} | рынков просмотрено: ${scanned}`);
   console.log(`ВИЛОК-моментов найдено: ${arbCount} | средний гарант. профит вилки: ${arbCount ? (arbProfitSum / arbCount * 100).toFixed(2) : 0}%`);
-  console.log(`Value-ног Betano (из вилок): ${legBets.length} | winrate=${(wr(legBets) * 100).toFixed(1)}% | ROI=${(roi(legBets) * 100).toFixed(1)}%`);
+  console.log(`Value-ног Betano (из вилок): ${legBets.length} | winrate=${(wr(legBets) * 100).toFixed(1)}% | ROI=${(roi(legBets) * 100).toFixed(1)}%\n`);
+  // РАЗМЕР перевеса: насколько крупный value у найденных вилок-ног
+  const sized = legBets.filter((b) => b.value != null);
+  const vs = sized.map((b) => b.value).sort((a, b) => a - b);
+  if (vs.length) console.log(`Размер value ног: min=${(vs[0] * 100).toFixed(1)}% медиана=${(vs[Math.floor(vs.length / 2)] * 100).toFixed(1)}% max=${(vs[vs.length - 1] * 100).toFixed(1)}%`);
+  console.log("Распределение по размеру value:");
+  for (const [lo, hi] of [[0, 0.03], [0.03, 0.05], [0.05, 0.10], [0.10, 1]]) {
+    const a = sized.filter((b) => b.value >= lo && b.value < hi);
+    console.log(`  ${(lo * 100).toFixed(0)}–${(hi * 100).toFixed(0)}%:  n=${String(a.length).padStart(3)}  winrate=${(wr(a) * 100).toFixed(0)}%  ROI=${(roi(a) * 100).toFixed(1)}%`);
+  }
 })().catch((e) => { console.error("ОШИБКА:", e.message); process.exit(1); });
