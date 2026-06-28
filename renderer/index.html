@@ -10,29 +10,20 @@
   <h1>Surebet&nbsp;Signal</h1>
 
   <section class="card" id="statusCard">
-    <div id="botPulse" style="margin:2px 0; font-size:14px;">бот: не запущен</div>
-    <div id="botCounters" style="margin:2px 0; font-size:13px;">сессия: всего 0 · хедж 0 · незахедж. 0 · пропущено 0</div>
     <div class="err" id="lastError"></div>
   </section>
 
   <div class="muted hint" id="saveHint"></div>
 
   <section class="card">
-    <h2>Конторы (антидетект)</h2>
-    <label class="liverow"><input type="checkbox" id="liveMode" /> <b>⚡ БОЕВОЙ режим</b> — реальные ставки (по умолчанию ВЫКЛ = dry-run)</label>
-    <div class="muted" id="fxLine">Курс USD→EUR: <b id="fxRate">…</b> <span id="fxSrc"></span></div>
-    <div class="row" style="margin:8px 0; gap:8px; align-items:flex-end;">
-      <label style="flex:0 0 160px; margin:0;">Лимит вилки на плечо, €<input id="vilkaLimit" type="number" min="0" step="1" placeholder="без лимита" /></label>
-      <button id="runBot">▶ Запуск бота (dry-run)</button>
-    </div>
-    <div class="muted" id="botResult" style="white-space:pre-wrap;"></div>
+    <h2>Конторы / аккаунты (антидетект)</h2>
     <div id="bookers"></div>
-    <div class="muted">У каждой конторы — своя сессия, прокси и отпечаток. «Войти» открывает её окно; логин сохраняется. Клик по плечу вилки откроет событие → впиши сумму → «Тест (dry-run)». Кнопка «Снять купон» на карточке — снимок разметки конторы (для отладки).</div>
+    <div class="muted">У каждой конторы — своя сессия, прокси и отпечаток. «Войти» открывает её окно; логин сохраняется. Кнопка «Тест (dry-run)» на карточке проверяет простановку без реальной ставки. «Снять купон» — снимок разметки конторы (для отладки).</div>
   </section>
 
   <section class="card">
     <h2>📨 Сигналы в Telegram</h2>
-    <p class="muted">Шлём в Telegram каждую вилку из фида, где есть плечо Pinnacle. Порог дохода и коэффициенты задаёшь в самом фильтре surebet — здесь доход не режется.</p>
+    <p class="muted">Сюда шлём уведомления о реально поставленных value-ставках. Токен и chat_id нужны для этих сообщений.</p>
     <label>Токен бота<input id="tgToken" type="text" placeholder="вставь токен бота" autocomplete="off" /></label>
     <label>Chat ID (куда слать)<input id="tgChat" type="text" placeholder="напр. 123456789 или -100…" autocomplete="off" /></label>
     <label>Контора-получатель (ключевик)<input id="tgKeyword" type="text" placeholder="pinnacle" autocomplete="off" /></label>

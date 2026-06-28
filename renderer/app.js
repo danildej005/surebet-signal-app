@@ -4,22 +4,7 @@ const $ = (id) => document.getElementById(id);
 function renderStatus(s) {
   if (!s) return;
   const setText = (id, t) => { const e = $(id); if (e) e.textContent = t; }; // верхние элементы могли быть убраны
-  const dot = $("dot");
-  if (dot) dot.className = "dot " + (s.loggedOut ? "warn" : s.running ? "on" : "pause");
-  setText("stateText", s.loggedOut ? "Нужен вход в surebet" : s.running ? "Слежу за вилками" : "Пауза");
-  setText("counts", `вилок: ${s.total} · Pinnacle: ${s.pinnacle} · отправлено: ${s.sent}`);
-  setText("lastSignal", s.lastSignal ? `последний сигнал: ${s.lastSignal.event} (${s.lastSignal.profit}%)` : "");
-  setText("lastError", s.loggedOut ? "⚠️ Нужен вход в surebet — бот не работает" : (s.lastError ? "⚠️ " + s.lastError : ""));
-  if (s.settings && typeof s.settings.liveMode === "boolean" && document.activeElement !== $("liveMode")) {
-    $("liveMode").checked = s.settings.liveMode;
-  }
-  if (typeof s.botArmed === "boolean" && s.botArmed !== botArmedUi) setBotBtn(s.botArmed);
-  // Лимит вилки: заполняем поле ОДИН раз при загрузке. Дальше НЕ трогаем — иначе очистка/новое
-  // значение затирались сохранённым на каждом тике (бот «застревал» на старом лимите 5€).
-  if (!vilkaLimitInit && s.settings && s.settings.vilkaLimitEur != null) {
-    vilkaLimitInit = true;
-    if (s.settings.vilkaLimitEur > 0 && document.activeElement !== $("vilkaLimit")) $("vilkaLimit").value = s.settings.vilkaLimitEur;
-  }
+  setText("lastError", s.lastError ? "⚠️ " + s.lastError : "");
   // Telegram-поля: заполняем ОДИН раз при загрузке (токен не показываем — только подсказку «задан»).
   if (!tgInit && s.settings) {
     tgInit = true;
@@ -47,35 +32,14 @@ function renderStatus(s) {
     renderValueMarkets();
   }
 }
-let vilkaLimitInit = false; // лимит вилки в поле инициализирован (заполняем только раз)
 let tgInit = false;         // Telegram-поля инициализированы (заполняем только раз)
 let valueInit = false;      // value-поля инициализированы (заполняем только раз)
-let botArmedUi = false;
-function setBotBtn(armed) {
-  botArmedUi = armed;
-  const live = $("liveMode").checked;
-  $("runBot").textContent = armed ? "⏹ Стоп (жду вилку)" : (live ? "▶ Запуск бота ⚡БОЕВОЙ" : "▶ Запуск бота (dry-run)");
-}
 
 async function refresh() { renderStatus(await window.api.getStatus()); }
 
 window.api.onStatus(renderStatus);
 
-if ($("openSurebet")) $("openSurebet").onclick = () => window.api.openSurebet();
-$("openLogs").onclick = () => window.api.openLogs();
-$("liveMode").onchange = () => { window.api.saveSettings({ liveMode: $("liveMode").checked }); setBotBtn(botArmedUi); };
-
-function showFx(r) {
-  if (!r || !$("fxRate")) return;
-  $("fxRate").textContent = Number(r.rate).toFixed(4);
-  const ago = r.at ? new Date(r.at).toLocaleTimeString() : "";
-  $("fxSrc").textContent = r.stale ? "⚠️ (не обновился, " + (r.source || "") + ")" : (ago ? "· " + ago : "");
-}
-if (window.api.getFx) window.api.getFx().then(showFx).catch(() => {});
-if (window.api.onFx) window.api.onFx(showFx);
-
-// лимит вилки на плечо (€) — сохраняем при изменении
-$("vilkaLimit").onchange = () => window.api.saveSettings({ vilkaLimitEur: Number($("vilkaLimit").value) || 0 });
+if ($("openLogs")) $("openLogs").onclick = () => window.api.openLogs();
 
 // ── Telegram: сохранение настроек + тест ──────────────────────────────────────
 async function saveTg() {
@@ -165,77 +129,6 @@ if ($("valueSave")) $("valueSave").onclick = async () => {
 // тумблеры value сохраняем сразу (движок подхватит на следующем тике)
 if ($("valueMode")) $("valueMode").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valueMode").checked ? "🎯 value-режим ВКЛ" : "value-режим выкл"; }).catch((e) => { $("valueResult").textContent = "⚠️ " + e.message; });
 if ($("valueLive")) $("valueLive").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valueLive").checked ? "⚡ боевой ВКЛ" : "dry-run"; }).catch(() => {});
-
-function fmtLeg(name, l) {
-  if (!l) return name + ": —";
-  const ok = l.oddsOk === false ? " ⚠️УЕХАЛ" : (l.oddsOk ? " ✓" : "");
-  return name + ": " + (l.selected || "?") + " · кэф " + (l.odds ?? "?") + ok +
-    " · ставка " + (l.stake ?? "?") + " (вписано " + (l.stakeValue ?? "?") + ")" +
-    " · макс " + (l.max ?? "?") + " · баланс " + (l.balance ?? "?") + " · кнопка: " + (l.placeBtn || "—");
-}
-function fmtBot(r) {
-  if (!r) return "—";
-  if (!r.ok) return "⚠️ " + (r.error || "ошибка") + (r.calc ? " · профит " + r.calc.profitPct + "%" : "");
-  const head = (r.placed ? "✅ ПОСТАВЛЕНО · " : "🧪 dry-run · ") +
-    "профит " + r.profitPct + "% (" + r.profitEur + "€ с " + r.totalEur + "€) · курс " + r.rate;
-  return head + "\n  " + fmtLeg("Betano", r.betano) + "\n  " + fmtLeg("Pinnacle", r.pinnacle);
-}
-$("runBot").onclick = async () => {
-  const live = $("liveMode").checked;
-  try {
-    const r = await window.api.runBot(live);
-    setBotBtn(!!(r && r.armed));
-    $("botResult").textContent = (r && r.armed)
-      ? "⏳ жду вилку Betano + Pinnacle(Delayed)… как поймаю — проставлю и остановлюсь"
-      : "бот снят с ожидания";
-  } catch (e) { $("botResult").textContent = "⚠️ " + e.message; }
-};
-// результат цикла приходит push-ом: пропуск (ищем дальше, остаёмся в ожидании) или успех (стоп)
-if (window.api.onBot) window.api.onBot((res) => {
-  // ТЕСТ-РЕЖИМ: и скип, и успех — остаёмся взведёнными (бот крутит до 10 успехов, потом отчёт)
-  if (res && res.skipped) {
-    $("botResult").textContent = "⏭ пропустил «" + (res.pair || "?") + "» (" + (res.reason || "не умею") + ") — ищу дальше…";
-  } else {
-    $("botResult").textContent = fmtBot(res) + "\n…тест продолжается, ищу следующую вилку";
-  }
-  setBotBtn(true);
-});
-if (window.api.onBotStats) window.api.onBotStats((report) => {
-  const el = $("botResult");
-  el.style.whiteSpace = "pre-wrap";
-  el.textContent = report;            // развёрнутый отчёт по тесту
-  setBotBtn(false);                   // тест завершён → бот разоружён
-});
-// ЖИВОЙ ПУЛЬС: обновляется каждый тик — видно, что бот жив / ждёт / обрабатывает / упал в ошибку
-if (window.api.onBotPulse) window.api.onBotPulse((p) => {
-  const el = $("botPulse");
-  if (!el || !p) return;
-  const t = new Date(p.at || Date.now()).toLocaleTimeString();
-  let s, color;
-  if (p.armed === false) {
-    color = "#7f8c8d"; s = "⏹ остановлен";
-  } else if (p.error) {
-    color = "#c0392b"; s = "🔴 ОШИБКА: " + p.error;
-  } else if (p.wait) {
-    color = "#e67e22"; s = "⏸ жду пополнения баланса: " + p.wait; // плечо не покрывается — ждём, не выключаемся
-  } else if (p.busy) {
-    color = "#2980b9"; s = "⚙️ обрабатываю вилку… · успехов " + (p.success || 0) + (p.target ? "/" + p.target : "") + " · пробовано " + (p.tried || 0);
-  } else {
-    color = "#27ae60"; s = "🟢 жив, жду вилку · в фиде " + (p.records || 0) + ", годных пар " + (p.pairs || 0) + ", новых " + (p.fresh || 0) +
-      " · успехов " + (p.success || 0) + (p.target ? "/" + p.target : "") + " · пробовано " + (p.tried || 0);
-  }
-  el.style.color = color;
-  el.textContent = "бот " + t + ": " + s;
-  // счётчики сессии
-  const cnt = $("botCounters");
-  if (cnt) {
-    const exposed = p.exposed || 0;
-    cnt.textContent = "сессия: всего " + (p.total || 0) + " · ✅ хедж " + (p.hedged || 0) +
-      " · 🔴 незахедж. " + exposed + " · ⏭ пропущено " + (p.skipped || 0);
-    cnt.style.color = exposed > 0 ? "#c0392b" : "#333";
-    cnt.style.fontWeight = exposed > 0 ? "700" : "400";
-  }
-});
 
 // ── конторы (антидетект-профили) ──────────────────────────────────────────────
 let bookersCache = [];
