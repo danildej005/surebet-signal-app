@@ -16,6 +16,7 @@ const { defaultBookers, emptyProxy, buildProxyString, betanoTarget, localizeBeta
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 const fx = require("./lib/fx.cjs");
 const { parseMoney, vilkaStakes } = require("./lib/vilka.cjs");
+const { scanOnce } = require("./lib/valuescanner.cjs"); // value-режим (oddspapi): сканер кандидатов
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -1120,6 +1121,68 @@ async function runOneBotCycle(live = false) {
   finally { botBusy = false; }
 }
 
+// === VALUE-режим (oddspapi): эталон Pinnacle (de-vig), ставим ОДИНОЧКУ на Betano. ===
+// Активен ТОЛЬКО при settings.valueMode && settings.oddsApiKey — иначе не трогает существующий surebet-бот.
+const triedValue = new Set(); // пробованные исходы (eventId|marketId|outcomeId) — не дублируем
+let valueBusy = false;        // идёт ли value-цикл
+let lastValueScan = 0;        // троттлинг сканов
+let valueDay = "";            // дата для суточного лимита
+let valueCount = 0;           // поставлено сегодня
+
+function formatValueTelegram(c, res, live) {
+  const head = res.placed ? (live ? "✅ VALUE поставлено" : "🧪 VALUE dry-run") : "⏭ VALUE не поставлено";
+  return [
+    "<b>" + escHtml(head) + "</b>",
+    escHtml((c.p1 || "?") + " vs " + (c.p2 || "?")),
+    escHtml(c.desc + " @ " + c.expectedOdds + " | value +" + (c.valuePct * 100).toFixed(1) + "% (честный " + c.fairOdds.toFixed(2) + ")"),
+    res.selected ? escHtml("выбрано: " + res.selected + (res.selectedOdds ? " @ " + res.selectedOdds : "")) : "",
+    res.error ? escHtml("причина: " + res.error) : "",
+  ].filter(Boolean).join("\n");
+}
+
+// Открыть событие betano.bg по кандидату и (live) поставить одну ногу. Переиспуем placeBet (выбор по
+// имени+кэфу, сверка oddsOk на странице — это и есть защита от уехавшего кэфа, и клик в боевом).
+async function runValueCycle(c, live) {
+  const booker = findBooker("betano");
+  if (!booker) return { ok: false, error: "контора betano не настроена" };
+  pendingBet.set("betano", { outcomeId: c.outcomeId, expectedOdds: c.expectedOdds, desc: c.desc, descFull: c.subject || c.desc, subject: c.subject });
+  await openBookerProfile(booker, c.url).catch((e) => logger.log("WARN", "value openBooker:", e));
+  const w = bookerWins.get("betano");
+  let onEvent = false;
+  for (let i = 0; i < 15; i++) {
+    await sleep(1000);
+    if (!w || w.isDestroyed()) return { ok: false, error: "окно betano закрылось" };
+    let u = ""; try { u = w.webContents.getURL(); } catch { /* ignore */ }
+    if (isEventUrl(u)) { onEvent = true; break; }
+  }
+  if (!onEvent) return { ok: false, error: "событие betano.bg не открылось" };
+  const r = await placeBet("betano", c.stake, live);
+  return { ...r, candidate: c };
+}
+
+// Один проход value: скан → фильтр пробованных/суточного лимита → топ-кандидат → простановка → Telegram.
+async function valueScanAndPlace(live) {
+  valueBusy = true;
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    if (valueDay !== today) { valueDay = today; valueCount = 0; }
+    if (valueCount >= (Number(settings.valueMaxPerDay) || 0)) { logger.log("INFO", "[value] лимит ставок/сутки достигнут (" + valueCount + ")"); return; }
+    const cfg = { sportId: settings.valueSportId, tournamentIds: settings.valueTournaments, threshold: Number(settings.valueThreshold) || 0.05, stake: Number(settings.valueStake) || 0 };
+    const cands = await scanOnce(settings.oddsApiKey, cfg);
+    const fresh = cands.filter((c) => !triedValue.has(c.eventId + "|" + c.marketId + "|" + c.outcomeId));
+    logger.log("INFO", "[value] кандидатов: " + cands.length + " | новых: " + fresh.length + (cands[0] ? " | топ +" + (cands[0].valuePct * 100).toFixed(1) + "%" : ""));
+    if (!fresh.length) return;
+    const c = fresh[0];
+    triedValue.add(c.eventId + "|" + c.marketId + "|" + c.outcomeId);
+    logger.log("INFO", "[value] беру: " + c.p1 + " vs " + c.p2 + " | " + c.desc + " @" + c.expectedOdds + " | +" + (c.valuePct * 100).toFixed(1) + "% | " + c.url);
+    const res = await runValueCycle(c, live);
+    if (res.placed) valueCount++;
+    logger.log(res.placed ? "INFO" : "WARN", "[value] " + (live ? "PLACE" : "dry-run") + ": " + JSON.stringify({ ok: res.ok, placed: res.placed, selected: res.selected, oddsOk: res.oddsOk, error: res.error }));
+    if (res.placed && settings.tgToken && settings.tgChat) tg(formatValueTelegram(c, res, live)).catch(() => {});
+  } catch (e) { logger.log("ERROR", "[value] цикл:", e.message); }
+  finally { valueBusy = false; }
+}
+
 function findBooker(id) { return (settings.bookers || []).find((b) => b.id === id); }
 function activeBookerWin() {
   let w = lastBookerId && bookerWins.get(lastBookerId);
@@ -1233,6 +1296,16 @@ function maskedSettings() {
     liveMode: !!settings.liveMode,
     vilkaLimitEur: settings.vilkaLimitEur || 0,
     hasToken: !!settings.tgToken,
+    // VALUE-режим (ключ маскируем как токен; остальное — для панели)
+    hasOddsApiKey: !!settings.oddsApiKey,
+    oddsApiKey: settings.oddsApiKey ? settings.oddsApiKey.slice(0, 6) + "…" : "",
+    valueMode: !!settings.valueMode,
+    valueLive: !!settings.valueLive,
+    valueSportId: settings.valueSportId || "10",
+    valueTournaments: settings.valueTournaments || "",
+    valueThreshold: settings.valueThreshold != null ? settings.valueThreshold : 0.05,
+    valueStake: settings.valueStake || 0,
+    valueMaxPerDay: settings.valueMaxPerDay != null ? settings.valueMaxPerDay : 20,
   };
 }
 
@@ -1429,6 +1502,14 @@ async function tick() {
     }).catch((e) => logger.log("ERROR", "bot cycle:", e));
   }
 
+  // VALUE-режим (oddspapi): отдельный путь. Активен ТОЛЬКО при settings.valueMode + oddsApiKey (иначе не
+  // трогает surebet-бот). Троттлинг скана (раз в 60с), не параллелит ни с surebet-ботом, ни сам с собой
+  // (общее окно Betano). Эталон Pinnacle, ставим одиночку на Betano; valueLive=false → dry-run.
+  if (settings.valueMode && settings.oddsApiKey && !botBusy && !valueBusy && Date.now() - lastValueScan > 60000) {
+    lastValueScan = Date.now();
+    valueScanAndPlace(!!settings.valueLive).catch((e) => logger.log("ERROR", "value:", e && e.message));
+  }
+
   pushStatus();
 }
 
@@ -1517,6 +1598,15 @@ ipcMain.handle("save-settings", (_e, patch) => {
   if (patch.keyword) clean.keyword = String(patch.keyword).trim().toLowerCase();
   if (typeof patch.liveMode === "boolean") clean.liveMode = patch.liveMode;
   if (patch.vilkaLimitEur !== undefined) clean.vilkaLimitEur = Math.max(0, Number(patch.vilkaLimitEur) || 0);
+  // VALUE-режим (oddspapi). Ключ — как токен: пишем только если непустой (пустой не затирает сохранённый).
+  if (typeof patch.oddsApiKey === "string" && patch.oddsApiKey.trim()) clean.oddsApiKey = patch.oddsApiKey.trim();
+  if (typeof patch.valueMode === "boolean") clean.valueMode = patch.valueMode;
+  if (typeof patch.valueLive === "boolean") clean.valueLive = patch.valueLive;
+  if (patch.valueSportId !== undefined) clean.valueSportId = String(patch.valueSportId).trim();
+  if (typeof patch.valueTournaments === "string") clean.valueTournaments = patch.valueTournaments.trim();
+  if (patch.valueThreshold !== undefined) clean.valueThreshold = Math.max(0, Number(patch.valueThreshold) || 0.05);
+  if (patch.valueStake !== undefined) clean.valueStake = Math.max(0, Number(patch.valueStake) || 0);
+  if (patch.valueMaxPerDay !== undefined) clean.valueMaxPerDay = Math.max(0, Number(patch.valueMaxPerDay) || 0);
   settings = settingsStore.save(clean);
   startupSent = false;
   startLoop();
