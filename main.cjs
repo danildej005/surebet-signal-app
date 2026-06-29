@@ -17,6 +17,7 @@ const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 const fx = require("./lib/fx.cjs");
 const { parseMoney, vilkaStakes } = require("./lib/vilka.cjs");
 const { scanAll } = require("./lib/valuescanner.cjs"); // value-режим: мультиспорт-сканер (эталон ps3838 / oddspapi)
+const oddsapi = require("./lib/oddspapi.cjs"); // клиент oddspapi (для списка лиг в панели)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -1652,6 +1653,18 @@ ipcMain.handle("save-settings", (_e, patch) => {
   return maskedSettings();
 });
 ipcMain.handle("open-surebet", () => { if (surebetWin) { surebetWin.show(); surebetWin.focus(); } });
+// Список лиг спорта из oddspapi (для пикера в панели): только с ближайшими/будущими матчами, по убыванию.
+ipcMain.handle("get-tournaments", async (_e, sportId) => {
+  if (!settings.oddsApiKey) return { error: "сначала впиши и сохрани ключ oddspapi" };
+  try {
+    const list = oddsapi.asList(await oddsapi.tournaments(sportId, settings.oddsApiKey))
+      .filter((t) => ((t.upcomingFixtures || 0) + (t.futureFixtures || 0)) > 0)
+      .sort((a, b) => ((b.upcomingFixtures || 0) + (b.futureFixtures || 0)) - ((a.upcomingFixtures || 0) + (a.futureFixtures || 0)))
+      .slice(0, 120)
+      .map((t) => ({ id: String(t.tournamentId), label: (t.categoryName ? t.categoryName + " / " : "") + (t.tournamentName || "?"), n: (t.upcomingFixtures || 0) }));
+    return { ok: true, list };
+  } catch (e) { return { error: e.message }; }
+});
 ipcMain.handle("set-running", (_e, v) => { setRunning(!!v); return running; });
 ipcMain.handle("test-telegram", async () => {
   if (!settings.tgToken || !settings.tgChat) return { ok: false, error: "не заданы токен/chat_id" };

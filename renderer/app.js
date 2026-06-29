@@ -105,10 +105,35 @@ function renderValueSports() {
     const cb = el("input", { type: "checkbox", checked: !!sp.on }); cb.style.width = "auto";
     cb.onchange = () => { sp.on = cb.checked; };
     const lg = el("input", { type: "text", value: sp.leagues || "", placeholder: "id лиг, напр. 16,7" });
+    lg.style.flex = "1";
     lg.oninput = () => { sp.leagues = lg.value; };
-    root.append(el("div", { className: "row", style: "gap:6px; align-items:center; margin:3px 0;" }, [
-      cb, el("span", { textContent: sp.name, style: "flex:0 0 160px;" }), lg,
+    root.append(el("div", { className: "row", style: "gap:6px; align-items:center; margin:4px 0 0 0;" }, [
+      cb, el("span", { textContent: sp.name, style: "flex:0 0 150px;" }), lg,
     ]));
+
+    // компактный пикер лиг: раскрыл → подтянулся список турниров из API, галочки → id в поле
+    const box = el("div", { style: "max-height:170px; overflow:auto; margin:2px 0 4px 22px;" });
+    const det = el("details", { style: "margin:0 0 4px 22px;" });
+    det.append(el("summary", { className: "muted", textContent: "лиги ⬇ (загрузить из API)" }), box);
+    let loaded = false;
+    det.addEventListener("toggle", async () => {
+      if (!det.open || loaded) return;
+      loaded = true; box.textContent = "загружаю…";
+      try {
+        const r = await window.api.getTournaments(sp.oa);
+        if (!r || r.error) { box.textContent = "⚠️ " + ((r && r.error) || "ошибка"); loaded = false; return; }
+        box.innerHTML = "";
+        const sel = new Set((sp.leagues || "").split(",").map((x) => x.trim()).filter(Boolean));
+        const sync = () => { sp.leagues = [...sel].join(","); lg.value = sp.leagues; };
+        (r.list || []).forEach((t) => {
+          const c = el("input", { type: "checkbox", checked: sel.has(t.id) }); c.style.width = "auto";
+          c.onchange = () => { if (c.checked) sel.add(t.id); else sel.delete(t.id); sync(); };
+          box.append(el("label", { className: "muted", style: "display:flex; gap:6px; align-items:center; font-size:12px; margin:1px 0;" }, [c, el("span", { textContent: t.label + " · " + t.n })]));
+        });
+        if (!(r.list || []).length) box.textContent = "нет активных лиг (проверь ключ/спорт)";
+      } catch (e) { box.textContent = "⚠️ " + e.message; loaded = false; }
+    });
+    root.append(det);
   });
 }
 function renderValueMarkets() {

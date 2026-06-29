@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("api", {
   logoutSurebet: () => ipcRenderer.invoke("logout-surebet"),
   openLogs: () => ipcRenderer.invoke("open-logs"),
   getBookers: () => ipcRenderer.invoke("get-bookers"),
+  getTournaments: (sportId) => ipcRenderer.invoke("get-tournaments", sportId),
   saveBookers: (list) => ipcRenderer.invoke("save-bookers", list),
   openBooker: (id) => ipcRenderer.invoke("open-booker", id),
   randomizeFp: (id) => ipcRenderer.invoke("randomize-fp", id),
