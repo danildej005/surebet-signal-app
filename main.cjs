@@ -35,6 +35,7 @@ const PARTITION = "persist:surebet"; // постоянная сессия → л
 let settings = null;
 let dedupe = null;
 let surebetWin = null;
+let dashboardWin = null; // дашборд value-режима (живой лог + статус); заменил окно surebet
 let panelWin = null;
 const bookerWins = new Map(); // id конторы → окно
 const pendingBet = new Map(); // id конторы → { outcomeId, expectedOdds, desc } из последнего клика по плечу
@@ -115,6 +116,19 @@ function createPanelWindow() {
   });
   panelWin.loadFile(join(__dirname, "renderer", "index.html"));
   panelWin.on("closed", () => { panelWin = null; });
+}
+
+// Дашборд value-режима: живой лог (что делает бот) + статус. Заменяет окно surebet.
+function createDashboardWindow() {
+  if (dashboardWin && !dashboardWin.isDestroyed()) { dashboardWin.show(); dashboardWin.focus(); return; }
+  dashboardWin = new BrowserWindow({
+    width: 1100, height: 760,
+    title: "Surebet Signal — дашборд",
+    webPreferences: { preload: join(__dirname, "preload-control.cjs"), backgroundThrottling: false },
+  });
+  dashboardWin.loadFile(join(__dirname, "renderer", "dashboard.html"));
+  dashboardWin.on("close", (e) => { if (!app.isQuitting) { e.preventDefault(); dashboardWin.hide(); } });
+  dashboardWin.on("closed", () => { dashboardWin = null; });
 }
 
 // ── антидетект-окно конторы (профиль: сессия + прокси + отпечаток + гео) ───────
@@ -1133,7 +1147,7 @@ let valuePulseState = { on: false }; // статус value для шапки п�
 // Толкнуть статистику value в шапку панели (мердж с предыдущим состоянием).
 function sendValuePulse(extra) {
   valuePulseState = { ...valuePulseState, ...(extra || {}), at: Date.now() };
-  if (panelWin && !panelWin.isDestroyed()) panelWin.webContents.send("value-pulse", valuePulseState);
+  for (const w of [panelWin, dashboardWin]) { if (w && !w.isDestroyed()) try { w.webContents.send("value-pulse", valuePulseState); } catch { /* ignore */ } }
 }
 
 function formatValueTelegram(c, res, live) {
@@ -1272,10 +1286,9 @@ function trayImage() {
 
 function buildTrayMenu() {
   return Menu.buildFromTemplate([
-    { label: status.loggedOut ? "⚠️ нужен вход в surebet" : running ? "🟢 Слежу за вилками" : "⏸ Пауза", enabled: false },
-    { label: `Вилок: ${status.total} · Pinnacle: ${status.pinnacle} · отправлено: ${status.sent}`, enabled: false },
+    { label: valuePulseState.on ? (valuePulseState.live ? "🟢 value: БОЕВОЙ" : "🟡 value: dry-run") : "⏸ value выключен", enabled: false },
     { type: "separator" },
-    { label: "Открыть surebet (вход/фильтр)", click: () => { if (surebetWin) { surebetWin.show(); surebetWin.focus(); } } },
+    { label: "Дашборд (живой лог)…", click: createDashboardWindow },
     { label: "Панель и настройки…", click: createPanelWindow },
     { label: running ? "Поставить на паузу" : "Возобновить", click: () => setRunning(!running) },
     { type: "separator" },
@@ -1435,6 +1448,13 @@ async function watchdog(text) {
 }
 
 async function tick() {
+  // ── VALUE-режим: работает НЕЗАВИСИМО от surebet (окна surebet больше нет) ──
+  if (!valueBusy) sendValuePulse({ on: !!settings.valueMode, live: !!settings.valueLive });
+  if (settings.valueMode && settings.oddsApiKey && !botBusy && !valueBusy && Date.now() - lastValueScan > 60000) {
+    lastValueScan = Date.now();
+    valueScanAndPlace(!!settings.valueLive).catch((e) => logger.log("ERROR", "value:", e && e.message));
+  }
+  // ── surebet-фид (legacy): окно surebet больше не создаётся → блок ниже не выполняется ──
   if (!running || !surebetWin || surebetWin.isDestroyed()) return;
   const r = await readSurebet(surebetWin.webContents);
   status.lastCheck = Date.now();
@@ -1522,16 +1542,6 @@ async function tick() {
       // Лимита по числу успехов НЕТ — бот крутит бесконечно. Стоп только вручную (кнопка) или авто-стопом
       // при незахеджированной ставке (выше). Успех/скип → остаёмся взведёнными и ищем следующую вилку.
     }).catch((e) => logger.log("ERROR", "bot cycle:", e));
-  }
-
-  // статус value в шапку (вкл/выкл) — даже когда не идёт скан
-  if (!valueBusy) sendValuePulse({ on: !!settings.valueMode, live: !!settings.valueLive });
-  // VALUE-режим (oddspapi): отдельный путь. Активен ТОЛЬКО при settings.valueMode + oddsApiKey (иначе не
-  // трогает surebet-бот). Троттлинг скана (раз в 60с), не параллелит ни с surebet-ботом, ни сам с собой
-  // (общее окно Betano). Эталон Pinnacle, ставим одиночку на Betano; valueLive=false → dry-run.
-  if (settings.valueMode && settings.oddsApiKey && !botBusy && !valueBusy && Date.now() - lastValueScan > 60000) {
-    lastValueScan = Date.now();
-    valueScanAndPlace(!!settings.valueLive).catch((e) => logger.log("ERROR", "value:", e && e.message));
   }
 
   pushStatus();
@@ -1766,7 +1776,8 @@ if (!gotLock) {
       settings = settingsStore.load();
       dedupe = makeDeduper({ ttlMs: settings.dedupeTtlMs, file: join(app.getPath("userData"), "seen.json") });
 
-      createSurebetWindow();
+      logger.onLine((line) => { if (dashboardWin && !dashboardWin.isDestroyed()) try { dashboardWin.webContents.send("log", line); } catch { /* ignore */ } });
+      createDashboardWindow(); // дашборд (живой лог) вместо окна surebet
       createTray();
       createPanelWindow(); // панель показываем всегда (можно закрыть в трей)
       startLoop();
@@ -1780,7 +1791,7 @@ if (!gotLock) {
       logger.log("FATAL", "ошибка инициализации:", e);
     }
 
-    app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createSurebetWindow(); });
+    app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createPanelWindow(); });
   });
 
   app.on("window-all-closed", (e) => { /* живём в трее, не выходим */ });

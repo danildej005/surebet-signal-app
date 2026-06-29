@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>Дашборд — Surebet Signal</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    body { max-width: none; }
+    #log { background:#0b0f14; color:#cfe3f5; font:12px/1.45 ui-monospace, Menlo, Consolas, monospace;
+           padding:8px; height:calc(100vh - 150px); overflow:auto; white-space:pre-wrap; border-radius:8px; }
+    #log div { padding:1px 0; }
+    #log .v { color:#7CFC9A; }   /* value */
+    #log .e { color:#ff8a80; }   /* error */
+    #log .w { color:#ffd27d; }   /* warn  */
+    .bar { display:flex; gap:10px; align-items:center; margin:6px 0; flex-wrap:wrap; }
+  </style>
+</head>
+<body>
+  <h1 style="margin:6px 0;">🎯 Дашборд value-бота</h1>
+  <div id="valuePulse" style="font-size:14px; margin:4px 0;">🎯 value: …</div>
+  <div class="bar">
+    <label class="muted" style="display:flex; gap:6px; align-items:center;"><input type="checkbox" id="autoscroll" checked style="width:auto;" /> автопрокрутка</label>
+    <button id="clear" class="ghost">Очистить</button>
+    <button id="openLogs" class="ghost">Папка логов</button>
+    <span class="muted" id="lines"></span>
+  </div>
+  <div id="log"></div>
+  <script src="dashboard.js"></script>
+</body>
+</html>
