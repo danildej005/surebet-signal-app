@@ -26,4 +26,5 @@ contextBridge.exposeInMainWorld("api", {
   onBot: (cb) => ipcRenderer.on("bot", (_e, r) => cb(r)),
   onBotStats: (cb) => ipcRenderer.on("bot-stats", (_e, r) => cb(r)),
   onBotPulse: (cb) => ipcRenderer.on("bot-pulse", (_e, p) => cb(p)),
+  onValuePulse: (cb) => ipcRenderer.on("value-pulse", (_e, p) => cb(p)),
 });

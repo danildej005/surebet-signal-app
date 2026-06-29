@@ -17,9 +17,9 @@ function renderStatus(s) {
     valueInit = true;
     const v = s.settings;
     $("valueRefSource").value = v.valueRefSource || "ps3838";
-    fillSelect("valueThreshold", [2, 3, 5, 7, 10].map((p) => ({ val: p, txt: p + "%" })), Math.round((v.valueThreshold != null ? v.valueThreshold : 0.05) * 100));
-    fillSelect("valueOddsMin", [{ val: 0, txt: "без границы" }].concat([1.3, 1.5, 1.7, 2.0].map((o) => ({ val: o, txt: String(o) }))), v.valueOddsMin || 0);
-    fillSelect("valueOddsMax", [{ val: 0, txt: "без границы" }].concat([3, 5, 7, 10].map((o) => ({ val: o, txt: String(o) }))), v.valueOddsMax || 0);
+    $("valueThreshold").value = Math.round((v.valueThreshold != null ? v.valueThreshold : 0.05) * 1000) / 10; // доля → %
+    $("valueOddsMin").value = v.valueOddsMin || "";
+    $("valueOddsMax").value = v.valueOddsMax || "";
     if (v.valueStake) $("valueStake").value = v.valueStake;
     $("valueMaxPerDay").value = v.valueMaxPerDay != null ? v.valueMaxPerDay : 20;
     $("valueMode").checked = !!v.valueMode;
@@ -41,9 +41,29 @@ window.api.onStatus(renderStatus);
 
 if ($("openLogs")) $("openLogs").onclick = () => window.api.openLogs();
 
+// ── Статистика value в шапке (push из main каждый тик/скан) ───────────────────
+if (window.api.onValuePulse) window.api.onValuePulse((p) => {
+  const el = $("valuePulse"); if (!el || !p) return;
+  const t = new Date(p.at || Date.now()).toLocaleTimeString();
+  let s, color;
+  if (!p.on) { color = "#7f8c8d"; s = "🎯 value: выключен"; }
+  else if (p.error) { color = "#c0392b"; s = "🔴 value ОШИБКА: " + p.error; }
+  else if (p.scanning) { color = "#2980b9"; s = "⚙️ сканирую кэфы…"; }
+  else {
+    color = p.live ? "#1a9e4b" : "#e67e22";
+    s = "🎯 value " + (p.live ? "⚡БОЕВОЙ" : "dry-run") + " · кандидатов " + (p.candidates != null ? p.candidates : 0) +
+      (p.top != null ? " (топ +" + (p.top * 100).toFixed(1) + "%)" : "") +
+      " · поставлено " + (p.placedToday || 0) + "/" + (p.max || 0) + (p.note ? " · " + p.note : "");
+    if (p.lastBet) s += "\nпоследняя: " + p.lastBet;
+  }
+  el.style.color = color;
+  el.style.whiteSpace = "pre-wrap";
+  el.textContent = "value " + t + ": " + s;
+});
+
 // ── Telegram: сохранение настроек + тест ──────────────────────────────────────
 async function saveTg() {
-  const patch = { tgChat: $("tgChat").value.trim(), keyword: $("tgKeyword").value.trim() || "pinnacle" };
+  const patch = { tgChat: $("tgChat").value.trim() };
   const tok = $("tgToken").value.trim();
   if (tok) patch.tgToken = tok; // пустой токен не затирает сохранённый (см. main.cjs save-settings)
   await window.api.saveSettings(patch);

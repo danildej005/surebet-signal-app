@@ -10,6 +10,7 @@
   <h1>Surebet&nbsp;Signal</h1>
 
   <section class="card" id="statusCard">
+    <div id="valuePulse" style="margin:2px 0; font-size:14px;">🎯 value: выключен</div>
     <div class="err" id="lastError"></div>
   </section>
 
@@ -22,18 +23,17 @@
   </section>
 
   <section class="card">
-    <h2>📨 Сигналы в Telegram</h2>
-    <p class="muted">Сюда шлём уведомления о реально поставленных value-ставках. Токен и chat_id нужны для этих сообщений.</p>
-    <label>Токен бота<input id="tgToken" type="text" placeholder="вставь токен бота" autocomplete="off" /></label>
-    <label>Chat ID (куда слать)<input id="tgChat" type="text" placeholder="напр. 123456789 или -100…" autocomplete="off" /></label>
-    <label>Контора-получатель (ключевик)<input id="tgKeyword" type="text" placeholder="pinnacle" autocomplete="off" /></label>
-    <div class="row" style="margin-top:8px;">
-      <button id="tgSave">Сохранить</button>
-      <button id="tgTest" class="ghost">Проверить (тест-сообщение)</button>
-    </div>
-    <div class="muted" id="tgResult"></div>
-    <div class="muted" id="counts" style="margin-top:6px;"></div>
-    <div class="muted" id="lastSignal"></div>
+    <details>
+      <summary><b>📨 Сигналы в Telegram</b></summary>
+      <p class="muted">Уведомления о реально поставленных value-ставках. Токен и chat_id нужны для этих сообщений.</p>
+      <label>Токен бота<input id="tgToken" type="text" placeholder="вставь токен бота" autocomplete="off" /></label>
+      <label>Chat ID (куда слать)<input id="tgChat" type="text" placeholder="напр. 123456789 или -100…" autocomplete="off" /></label>
+      <div class="row" style="margin-top:8px;">
+        <button id="tgSave">Сохранить</button>
+        <button id="tgTest" class="ghost">Проверить (тест-сообщение)</button>
+      </div>
+      <div class="muted" id="tgResult"></div>
+    </details>
   </section>
 
   <section class="card" id="valueCard">
@@ -56,12 +56,12 @@
       <div id="valueMarkets"></div>
     </div>
     <div class="grid2">
-      <label>Порог value<select id="valueThreshold"></select></label>
+      <label>Порог value, %<input id="valueThreshold" type="number" min="0" step="0.1" placeholder="напр. 5" /></label>
       <label>Ставка фикс (валюта Betano)<input id="valueStake" type="number" min="0" step="1" placeholder="напр. 10" /></label>
     </div>
     <div class="grid2">
-      <label>Кэф от<select id="valueOddsMin"></select></label>
-      <label>Кэф до<select id="valueOddsMax"></select></label>
+      <label>Кэф от<input id="valueOddsMin" type="number" min="0" step="0.05" placeholder="0 = без границы" /></label>
+      <label>Кэф до<input id="valueOddsMax" type="number" min="0" step="0.05" placeholder="0 = без границы" /></label>
     </div>
     <label>Лимит ставок в сутки<input id="valueMaxPerDay" type="number" min="0" step="1" placeholder="20" /></label>
     <label class="liverow"><input type="checkbox" id="valueMode" /> <b>Value-режим ВКЛ</b> — сканировать и ставить</label>

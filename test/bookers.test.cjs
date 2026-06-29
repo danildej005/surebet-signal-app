@@ -83,7 +83,8 @@ test("неизвестная ссылка → null", () => {
 
 test("дефолтные конторы и отпечаток валидны", () => {
   const d = defaultBookers();
-  assert.ok(d.find((b) => b.id === "pinnacle").url.includes("pinnacle888"));
+  assert.ok(d.find((b) => b.id === "betano").url.includes("betano.bg")); // value-режим: ставим на Betano BG
+  assert.ok(!d.find((b) => b.id === "pinnacle")); // Pinnacle убран — кэфы берём из API (oddspapi/ps3838)
   // скрипт отпечатка компилируется
   require("node:vm").compileFunction(buildFingerprintScript(randomFingerprint()));
 });

@@ -1128,6 +1128,13 @@ let valueBusy = false;        // идёт ли value-цикл
 let lastValueScan = 0;        // троттлинг сканов
 let valueDay = "";            // дата для суточного лимита
 let valueCount = 0;           // поставлено сегодня
+let valuePulseState = { on: false }; // статус value для шапки панели
+
+// Толкнуть статистику value в шапку панели (мердж с предыдущим состоянием).
+function sendValuePulse(extra) {
+  valuePulseState = { ...valuePulseState, ...(extra || {}), at: Date.now() };
+  if (panelWin && !panelWin.isDestroyed()) panelWin.webContents.send("value-pulse", valuePulseState);
+}
 
 function formatValueTelegram(c, res, live) {
   const head = res.placed ? (live ? "✅ VALUE поставлено" : "🧪 VALUE dry-run") : "⏭ VALUE не поставлено";
@@ -1163,10 +1170,12 @@ async function runValueCycle(c, live) {
 // Один проход value: скан → фильтр пробованных/суточного лимита → топ-кандидат → простановка → Telegram.
 async function valueScanAndPlace(live) {
   valueBusy = true;
+  sendValuePulse({ on: true, live: !!live, scanning: true, error: "" });
   try {
     const today = new Date().toISOString().slice(0, 10);
     if (valueDay !== today) { valueDay = today; valueCount = 0; }
-    if (valueCount >= (Number(settings.valueMaxPerDay) || 0)) { logger.log("INFO", "[value] лимит ставок/сутки достигнут (" + valueCount + ")"); return; }
+    const max = Number(settings.valueMaxPerDay) || 0;
+    if (valueCount >= max) { logger.log("INFO", "[value] лимит ставок/сутки достигнут (" + valueCount + ")"); sendValuePulse({ scanning: false, placedToday: valueCount, max, note: "лимит/сутки" }); return; }
     const cands = await scanAll(settings.oddsApiKey, settings.ps3838Auth, {
       sports: settings.valueSports || [],
       refSource: settings.valueRefSource || "ps3838",
@@ -1178,6 +1187,7 @@ async function valueScanAndPlace(live) {
     });
     const fresh = cands.filter((c) => !triedValue.has(c.eventId + "|" + c.marketId + "|" + c.outcomeId));
     logger.log("INFO", "[value] кандидатов: " + cands.length + " | новых: " + fresh.length + (cands[0] ? " | топ +" + (cands[0].valuePct * 100).toFixed(1) + "%" : ""));
+    sendValuePulse({ scanning: false, candidates: cands.length, fresh: fresh.length, top: cands[0] ? cands[0].valuePct : null, placedToday: valueCount, max, note: "" });
     if (!fresh.length) return;
     const c = fresh[0];
     triedValue.add(c.eventId + "|" + c.marketId + "|" + c.outcomeId);
@@ -1185,8 +1195,9 @@ async function valueScanAndPlace(live) {
     const res = await runValueCycle(c, live);
     if (res.placed) valueCount++;
     logger.log(res.placed ? "INFO" : "WARN", "[value] " + (live ? "PLACE" : "dry-run") + ": " + JSON.stringify({ ok: res.ok, placed: res.placed, selected: res.selected, oddsOk: res.oddsOk, error: res.error }));
+    sendValuePulse({ placedToday: valueCount, max, lastBet: (c.p1 || "?") + " vs " + (c.p2 || "?") + " · " + c.desc + " +" + (c.valuePct * 100).toFixed(1) + "% " + (res.placed ? (live ? "✅ставка" : "🧪dry") : "⏭ " + (res.error || "не поставил")) });
     if (res.placed && settings.tgToken && settings.tgChat) tg(formatValueTelegram(c, res, live)).catch(() => {});
-  } catch (e) { logger.log("ERROR", "[value] цикл:", e.message); }
+  } catch (e) { logger.log("ERROR", "[value] цикл:", e.message); sendValuePulse({ scanning: false, error: e.message }); }
   finally { valueBusy = false; }
 }
 
@@ -1513,6 +1524,8 @@ async function tick() {
     }).catch((e) => logger.log("ERROR", "bot cycle:", e));
   }
 
+  // статус value в шапку (вкл/выкл) — даже когда не идёт скан
+  if (!valueBusy) sendValuePulse({ on: !!settings.valueMode, live: !!settings.valueLive });
   // VALUE-режим (oddspapi): отдельный путь. Активен ТОЛЬКО при settings.valueMode + oddsApiKey (иначе не
   // трогает surebet-бот). Троттлинг скана (раз в 60с), не параллелит ни с surebet-ботом, ни сам с собой
   // (общее окно Betano). Эталон Pinnacle, ставим одиночку на Betano; valueLive=false → dry-run.
@@ -1646,7 +1659,8 @@ ipcMain.handle("open-logs", async () => {
   return { ok: !!d, dir: d };
 });
 ipcMain.handle("get-bookers", () => {
-  const list = (settings.bookers || []).map(normalizeBooker); // миграция старого формата
+  // Value-режим: Pinnacle убираем из контор (кэфы берём из API, окно не нужно) — миграция старых настроек.
+  const list = (settings.bookers || []).filter((b) => b && b.id !== "pinnacle").map(normalizeBooker);
   settings = settingsStore.save({ bookers: list });
   return settings.bookers || [];
 });
@@ -1758,9 +1772,9 @@ if (!gotLock) {
       startLoop();
       refreshFx(); // подтянуть курс USD→EUR (для калькулятора вилки)
       setInterval(refreshFx, 60 * 60 * 1000); // освежать раз в час (внутри есть кэш на 6ч)
-      // заранее открываем конторы с «автооткрытием» — чтобы к клику по вилке были залогинены
+      // заранее открываем конторы с «автооткрытием». Pinnacle НЕ открываем (его кэфы из API, окно не нужно).
       for (const b of (settings.bookers || [])) {
-        if (b && b.autoOpen) openBookerProfile(b).catch((e) => logger.log("WARN", "auto-open booker:", e));
+        if (b && b.id !== "pinnacle" && b.autoOpen) openBookerProfile(b).catch((e) => logger.log("WARN", "auto-open booker:", e));
       }
     } catch (e) {
       logger.log("FATAL", "ошибка инициализации:", e);
