@@ -24,8 +24,8 @@ function renderStatus(s) {
     $("valueMaxPerDay").value = v.valueMaxPerDay != null ? v.valueMaxPerDay : 20;
     $("valueMode").checked = !!v.valueMode;
     $("valueLive").checked = !!v.valueLive;
-    $("oddsApiKey").placeholder = v.hasOddsApiKey ? "ключ задан — пусто = не менять" : "вставь ключ";
-    $("ps3838Auth").placeholder = v.hasPs3838 ? "задано — пусто = не менять" : "login:pass";
+    $("oddsApiKey").value = v.oddsApiKey || "";   // показываем сохранённый ключ целиком (по просьбе)
+    $("ps3838Auth").value = v.ps3838Auth || "";   // и ps3838 login:pass
     valueSportsState = (v.valueSports && v.valueSports.length) ? v.valueSports.map((x) => ({ ...x })) : [];
     valueMarketsState = Array.isArray(v.valueMarkets) ? v.valueMarkets.slice() : [];
     renderValueSports();
@@ -165,7 +165,7 @@ function saveValue() {
   };
   const k = $("oddsApiKey").value.trim(); if (k) patch.oddsApiKey = k;
   const a = $("ps3838Auth").value.trim(); if (a) patch.ps3838Auth = a;
-  return window.api.saveSettings(patch).then(() => { $("oddsApiKey").value = ""; $("ps3838Auth").value = ""; });
+  return window.api.saveSettings(patch); // поля НЕ очищаем — ключ и ps3838 остаются видны
 }
 if ($("valueSave")) $("valueSave").onclick = async () => {
   try { await saveValue(); $("valueResult").textContent = "✅ сохранено"; }

@@ -1330,7 +1330,8 @@ function maskedSettings() {
     hasToken: !!settings.tgToken,
     // VALUE-режим (ключ маскируем как токен; остальное — для панели)
     hasOddsApiKey: !!settings.oddsApiKey,
-    oddsApiKey: settings.oddsApiKey ? settings.oddsApiKey.slice(0, 6) + "…" : "",
+    oddsApiKey: settings.oddsApiKey || "",   // по просьбе владельца показываем целиком (его машина)
+    ps3838Auth: settings.ps3838Auth || "",   // login:pass ps3838 — тоже видимо
     valueMode: !!settings.valueMode,
     valueLive: !!settings.valueLive,
     valueThreshold: settings.valueThreshold != null ? settings.valueThreshold : 0.05,
