@@ -1638,7 +1638,7 @@ ipcMain.handle("save-settings", (_e, patch) => {
   if (typeof patch.oddsApiKey === "string" && patch.oddsApiKey.trim()) clean.oddsApiKey = patch.oddsApiKey.trim();
   if (typeof patch.valueMode === "boolean") clean.valueMode = patch.valueMode;
   if (typeof patch.valueLive === "boolean") clean.valueLive = patch.valueLive;
-  if (Array.isArray(patch.valueSports)) clean.valueSports = patch.valueSports.map((s) => ({ key: String(s.key || ""), name: String(s.name || ""), oa: String(s.oa || ""), ps: String(s.ps || ""), on: !!s.on, leagues: String(s.leagues || "").trim() }));
+  if (Array.isArray(patch.valueSports)) clean.valueSports = patch.valueSports.map((s) => ({ key: String(s.key || ""), name: String(s.name || ""), oa: String(s.oa || ""), ps: String(s.ps || ""), on: !!s.on, exclude: Array.isArray(s.exclude) ? s.exclude.map(String) : [] }));
   if (Array.isArray(patch.valueMarkets)) clean.valueMarkets = patch.valueMarkets.map((m) => String(m));
   if (patch.valueOddsMin !== undefined) clean.valueOddsMin = Math.max(0, Number(patch.valueOddsMin) || 0);
   if (patch.valueOddsMax !== undefined) clean.valueOddsMax = Math.max(0, Number(patch.valueOddsMax) || 0);
@@ -1655,14 +1655,18 @@ ipcMain.handle("save-settings", (_e, patch) => {
 });
 ipcMain.handle("open-surebet", () => { if (surebetWin) { surebetWin.show(); surebetWin.focus(); } });
 // Список лиг спорта из oddspapi (для пикера в панели): только с ближайшими/будущими матчами, по убыванию.
+const _tnCache = new Map(); // sportId → {list, ts} (кэш 1ч, чтобы не дёргать API на каждый открыв панели)
 ipcMain.handle("get-tournaments", async (_e, sportId) => {
   if (!settings.oddsApiKey) return { error: "сначала впиши и сохрани ключ oddspapi" };
+  const c = _tnCache.get(String(sportId));
+  if (c && Date.now() - c.ts < 60 * 60 * 1000) return { ok: true, list: c.list };
   try {
     const list = oddsapi.asList(await oddsapi.tournaments(sportId, settings.oddsApiKey))
       .filter((t) => ((t.upcomingFixtures || 0) + (t.futureFixtures || 0)) > 0)
       .sort((a, b) => ((b.upcomingFixtures || 0) + (b.futureFixtures || 0)) - ((a.upcomingFixtures || 0) + (a.futureFixtures || 0)))
       .slice(0, 120)
       .map((t) => ({ id: String(t.tournamentId), label: (t.categoryName ? t.categoryName + " / " : "") + (t.tournamentName || "?"), n: (t.upcomingFixtures || 0) }));
+    _tnCache.set(String(sportId), { list, ts: Date.now() });
     return { ok: true, list };
   } catch (e) { return { error: e.message }; }
 });

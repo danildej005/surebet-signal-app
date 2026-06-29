@@ -102,38 +102,39 @@ function renderValueSports() {
   const root = $("valueSports"); if (!root) return;
   root.innerHTML = "";
   valueSportsState.forEach((sp) => {
+    sp.exclude = Array.isArray(sp.exclude) ? sp.exclude : [];
     const cb = el("input", { type: "checkbox", checked: !!sp.on }); cb.style.width = "auto";
-    cb.onchange = () => { sp.on = cb.checked; };
-    const lg = el("input", { type: "text", value: sp.leagues || "", placeholder: "id лиг, напр. 16,7" });
-    lg.style.flex = "1";
-    lg.oninput = () => { sp.leagues = lg.value; };
-    root.append(el("div", { className: "row", style: "gap:6px; align-items:center; margin:4px 0 0 0;" }, [
-      cb, el("span", { textContent: sp.name, style: "flex:0 0 150px;" }), lg,
-    ]));
+    const status = el("span", { className: "muted", textContent: sp.on ? "все лиги (авто)" : "выкл" });
+    const lgWrap = el("div", { style: "margin:2px 0 8px 22px;" });
 
-    // компактный пикер лиг: раскрыл → подтянулся список турниров из API, галочки → id в поле
-    const box = el("div", { style: "max-height:170px; overflow:auto; margin:2px 0 4px 22px;" });
-    const det = el("details", { style: "margin:0 0 4px 22px;" });
-    det.append(el("summary", { className: "muted", textContent: "лиги ⬇ (загрузить из API)" }), box);
-    let loaded = false;
-    det.addEventListener("toggle", async () => {
-      if (!det.open || loaded) return;
-      loaded = true; box.textContent = "загружаю…";
-      try {
-        const r = await window.api.getTournaments(sp.oa);
-        if (!r || r.error) { box.textContent = "⚠️ " + ((r && r.error) || "ошибка"); loaded = false; return; }
-        box.innerHTML = "";
-        const sel = new Set((sp.leagues || "").split(",").map((x) => x.trim()).filter(Boolean));
-        const sync = () => { sp.leagues = [...sel].join(","); lg.value = sp.leagues; };
-        (r.list || []).forEach((t) => {
-          const c = el("input", { type: "checkbox", checked: sel.has(t.id) }); c.style.width = "auto";
-          c.onchange = () => { if (c.checked) sel.add(t.id); else sel.delete(t.id); sync(); };
-          box.append(el("label", { className: "muted", style: "display:flex; gap:6px; align-items:center; font-size:12px; margin:1px 0;" }, [c, el("span", { textContent: t.label + " · " + t.n })]));
-        });
-        if (!(r.list || []).length) box.textContent = "нет активных лиг (проверь ключ/спорт)";
-      } catch (e) { box.textContent = "⚠️ " + e.message; loaded = false; }
-    });
-    root.append(det);
+    // при включённом спорте — авто-показ ВСЕХ его лиг (галочки, все включены кроме exclude). Новые лиги
+    // бот подхватывает сам (список освежается); сними галочку, чтобы исключить лигу.
+    const renderLeagues = async () => {
+      lgWrap.innerHTML = "";
+      if (!sp.on) { status.textContent = "выкл"; return; }
+      status.textContent = "все лиги (авто)";
+      lgWrap.append(el("div", { className: "muted", textContent: "загружаю лиги…" }));
+      const r = await window.api.getTournaments(sp.oa).catch((e) => ({ error: e.message }));
+      lgWrap.innerHTML = "";
+      if (!r || r.error) { lgWrap.append(el("div", { className: "muted", textContent: "лиги: ⚠️ " + ((r && r.error) || "ошибка — сохрани ключ oddspapi") })); return; }
+      const list = r.list || [];
+      const ex = new Set((sp.exclude || []).map(String));
+      lgWrap.append(el("div", { className: "muted", textContent: "лиги: " + list.length + " (все включены; сними галочку — исключить):" }));
+      const box = el("div", { style: "max-height:150px; overflow:auto; border:1px solid #eee; border-radius:6px; padding:4px;" });
+      list.forEach((t) => {
+        const c = el("input", { type: "checkbox", checked: !ex.has(t.id) }); c.style.width = "auto";
+        c.onchange = () => { if (c.checked) ex.delete(t.id); else ex.add(t.id); sp.exclude = [...ex]; };
+        box.append(el("label", { className: "muted", style: "display:flex; gap:6px; align-items:center; font-size:12px; margin:1px 0;" }, [c, el("span", { textContent: t.label + " · " + t.n })]));
+      });
+      if (!list.length) box.append(el("div", { className: "muted", textContent: "нет активных лиг (проверь ключ/спорт)" }));
+      lgWrap.append(box);
+    };
+    cb.onchange = () => { sp.on = cb.checked; renderLeagues(); };
+    root.append(el("div", { className: "row", style: "gap:6px; align-items:center; margin:6px 0 0 0;" }, [
+      cb, el("span", { textContent: sp.name, style: "flex:0 0 150px; font-weight:600;" }), status,
+    ]));
+    root.append(lgWrap);
+    if (sp.on) renderLeagues();
   });
 }
 function renderValueMarkets() {
@@ -160,7 +161,7 @@ function saveValue() {
     valueOddsMax: Number($("valueOddsMax").value) || 0,
     valueMode: $("valueMode").checked,
     valueLive: $("valueLive").checked,
-    valueSports: valueSportsState.map((s) => ({ key: s.key, name: s.name, oa: s.oa, ps: s.ps, on: !!s.on, leagues: (s.leagues || "").trim() })),
+    valueSports: valueSportsState.map((s) => ({ key: s.key, name: s.name, oa: s.oa, ps: s.ps, on: !!s.on, exclude: Array.isArray(s.exclude) ? s.exclude : [] })),
     valueMarkets: valueMarketsState.slice(),
   };
   const k = $("oddsApiKey").value.trim(); if (k) patch.oddsApiKey = k;
