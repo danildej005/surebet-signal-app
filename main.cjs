@@ -1638,11 +1638,36 @@ async function keepBookersAlive() {
   } catch { /* ignore */ } finally { keepAliveRunning = false; }
 }
 
+// Анти-разлогин для Octo-страниц (тот же смысл, что keepBookersAlive для Electron-окон: персистентность
+// профиля бережёт кукисы между запусками, но НЕ спасает от вылета betano.bg по бездействию ВНУТРИ сессии).
+// Лёгкая активность (движение мыши через CDP Octo) + перезагрузка той же страницы → серверный запрос
+// продлевает сессию. Скип, если идёт ставка (valueBusy/botBusy) или вкладка в фокусе (юзер сам работает).
+let keepOctoRunning = false;
+async function keepOctoAlive() {
+  if (keepOctoRunning || botBusy || valueBusy || !settings.keepAlive) return;
+  keepOctoRunning = true;
+  try {
+    for (const [id, win] of octoWins) {
+      if (botBusy || valueBusy) break;
+      if (!win || win.isDestroyed()) { octoWins.delete(id); continue; }
+      let focused = false;
+      try { focused = await win.webContents.executeJavaScript("document.hasFocus()"); } catch { /* ignore */ }
+      if (focused) continue; // юзер сам в окне Octo — не дёргаем
+      let before = ""; try { before = win.webContents.getURL(); } catch { /* ignore */ }
+      try { if (win.page && win.page.mouse) await win.page.mouse.move(6 + Math.random() * 14, 6 + Math.random() * 14); } catch { /* ignore */ }
+      await sleep(800);
+      if (botBusy || valueBusy || win.isDestroyed()) continue;
+      if (before && /^https?:/i.test(before)) { try { await win.loadURL(before); } catch { /* ignore */ } }
+      logger.log("INFO", "анти-разлогин Octo:", id, "активность + обновление");
+    }
+  } catch { /* ignore */ } finally { keepOctoRunning = false; }
+}
+
 function startLoop() {
   if (timer) clearInterval(timer);
   timer = setInterval(() => { tick().catch((e) => { status.lastError = e.message; logger.log("ERROR", "tick:", e); }); }, Math.max(3000, settings.pollMs || 8000));
   if (keepAliveTimer) clearInterval(keepAliveTimer);
-  keepAliveTimer = setInterval(() => { keepBookersAlive().catch(() => {}); }, 45000);
+  keepAliveTimer = setInterval(() => { keepBookersAlive().catch(() => {}); keepOctoAlive().catch(() => {}); }, 45000);
 }
 
 // ── авто-обновление ───────────────────────────────────────────────────────────
