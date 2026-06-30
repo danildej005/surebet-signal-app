@@ -4,7 +4,15 @@
 > сжатия контекста. Секретов тут НЕТ (токен/прокси-пароли хранятся в приложении шифрованно).
 
 Репозиторий: **github.com/danildej005/surebet-signal-app** (публичный).
-Текущая версия: **0.8.5** (собрана/опубликована 2026-06-30). Релизы — вручную с Mac → GitHub Releases.
+Текущая версия: **0.9.0** (собрана/опубликована 2026-07-01). Релизы — вручную с Mac → GitHub Releases.
+
+**0.9.0 — Octo Browser (антидетект) для Betano + автозапуск.** Карточка Betano переделана: кнопка «Войти (Octo)»
+стартует профиль Betano в Octo по UUID (Local API `:58888` → `ws_endpoint` → puppeteer-core) и открывает betano.bg;
+в карточке остались UUID профиля + адрес Local API + путь к Octo.exe + логин/пароль (прокси/UA/отпечаток — внутри
+Octo-профиля, убраны). Если Octo закрыт — бот сам запускает Octo.exe и ждёт Local API (до 45с). `octoMode` включается
+при «Войти» → value-цикл тоже ставит через Octo. Электронный антидетект остался запасным путём (`octoMode` off).
+`lib/octo.cjs` (+ тесты) — клиент Local API + адаптер puppeteer-страницы под поверхность Electron-окна (вся
+простановка переиспользована без переписывания). НЕ проверено живьём (нужен Octo на ВДС). Тесты 144/144.
 
 **0.8.5 — гео-диагностика окна конторы.** Кнопка «🌍 Гео-диаг» (карточка конторы) + IPC `geo-diag`: дампит, что
 РЕАЛЬНО видит сайт — WebRTC-IP (утечка реального IP ВДС?), navigator.geolocation, язык, таймзону, IP сессии через
@@ -15,15 +23,41 @@ BG/София, но это **датацентр M247** (ip-api: `proxy:true, hos
 Hetzner DE `138.201.85.223`) или несоответствия. Вероятный фикс: residential BG-прокси вместо датацентрового.
 ПРИМ.: позже гео-блок betano.bg перестал воспроизводиться (был временный).
 
-**🔜 СЛЕДУЮЩИЙ КРУПНЫЙ ШАГ — Octo Browser вместо нашего Electron-антидетекта (решение владельца 2026-06-30).**
-Наш «честный Electron» упирается в антифрод Betano; Octo — настоящий антидетект. Владелец создаёт профиль в Octo,
-мы подключаемся по API по UUID. Octo Local API `http://localhost:58888` (Octo должен быть запущен на ВДС) → старт
-профиля с `debug_port` → `ws_endpoint` → `puppeteer-core.connect`. Прокси residential BG и отпечаток — ВНУТРИ
-Octo-профиля (наш proxyBridge/fingerprint не нужны). Профиль персистентный (логин betano.bg не сбрасывается).
-Интеграция: `lib/octo.cjs` (start/stop+connect), переплести простановку (selectLegOutcome/fillStake/clickPlace/
-runValueCycle) на Octo-page (`page.evaluate`/`page.goto`) вместо Electron `win.webContents`; value-движок/сканер/
-oddspapi/ps3838 — без изменений. Нужно от владельца: Octo запущен+залогинен на ВДС, API-токен, UUID профиля Betano
-(залогинен в betano.bg), подписка Base+. **Полный план — память проекта `surebet-octo-browser-plan`.**
+**🟡 OCTO BROWSER — КОД СОБРАН И РАЗВЕДён (2026-06-30), ЖИВьём НЕ ПРОВЕРЕН (нет Octo на ВДС у разработчика).**
+Наш «честный Electron» упирается в антифрод Betano; Octo — настоящий антидетект. Профиль в Octo по UUID, подключение
+через Local API + `puppeteer-core.connect`. Прокси residential BG и отпечаток — ВНУТРИ Octo-профиля. Профиль
+персистентный (логин betano.bg не сбрасывается).
+
+Что сделано в коде (тумблер `octoMode`, по умолчанию ВЫКЛ — текущих пользователей не трогает; тесты 140/140 зелёные):
+- **`lib/octo.cjs`** — Local API клиент + чистые парсеры + адаптер. `connect(uuid)` = `startProfile`(POST
+  `/api/profiles/start {uuid, debug_port:true}` → `ws_endpoint` верхнего уровня) → `puppeteer.connect({browserWSEndpoint})`
+  → берём существующую вкладку профиля → `pageWindow(page)`. **`pageWindow`** — адаптер: оборачивает puppeteer-страницу
+  в объект с поверхностью Electron-окна (`win.webContents.executeJavaScript/getURL/capturePage`, `win.loadURL`,
+  `win.isDestroyed`) — поэтому ВСЯ простановка (`selectLegOutcome/fillStakeOnly/clickPlace/readBookmakerMax/dismissConsent`)
+  работает над Octo-страницей БЕЗ переписывания (page.evaluate принимает строку-код и ждёт промис — как Electron). Также
+  `stopProfile`/`listActive`/`isProfileActive`. Тесты — `test/octo.test.cjs` (+11).
+- **`main.cjs`**: `octoWins` (карта Octo-адаптеров) + аксессор `bookerWin(id)` (Octo-страница, иначе Electron-окно);
+  `openOctoBooker(profile,url)` (connect → положить адаптер в `octoWins` → goto). `runValueCycle` при `octoMode`
+  открывает betano.bg через Octo, иначе Electron (запасной путь). `selectLegOutcome`/`deselectLeg` читают окно через
+  `bookerWin`. `keepBookersAlive` Octo-страницы НЕ трогает (персистентность держит Octo). IPC `test-octo` (диагностика
+  подключения). value-движок/сканер/oddspapi/ps3838 — БЕЗ изменений.
+- **Настройки** (`settings.cjs` + masked + save): `octoMode`/`octoApiUrl`(деф `http://127.0.0.1:58888`)/`octoProfileId`
+  (UUID Betano)/`octoToken`(Cloud API, шифр., пока не используется). `npm i puppeteer-core` (runtime-зависимость).
+
+**ОСТАЛОСЬ для запуска Octo:** (1) ✅ UI готов — карточка Betano в панели переделана под Octo: только поля UUID
+профиля + адрес Local API + логин/пароль Betano + тест простановки; кнопка **«Войти (Octo)»** (IPC `open-octo`)
+сохраняет UUID, включает `octoMode` и открывает профиль Betano в Octo (`openOctoBooker`). Прокси/UA/отпечаток/гео-диаг
+из карточки Betano убраны (вся анонимка внутри Octo-профиля). `renderer/app.js`: ветка `b.id==="betano"` в renderBookers.
+**Автозапуск Octo:** если приложение закрыто, `octo.ensureRunning` сам поднимает Octo.exe (detached) и ждёт Local API
+до 45с, потом подключается. Путь к .exe: настройка `octoExePath` (поле в карточке) или авто-поиск
+(`defaultExeCandidates`: LOCALAPPDATA/PROGRAMFILES, имена под вопросом — на Windows-ВДС проверить реальный путь и
+при необходимости вписать вручную). Залогиниться в мастер-аккаунт Octo всё равно надо один раз руками.
+(2) Живая
+проверка на ВДС: Octo запущен+залогинен в betano.bg, вписать UUID → `test-octo` → прогнать dry-run `runValueCycle`
+(проверить, что `page.evaluate`-простановка реально кликает исход/вписывает сумму на betano.bg в Octo). (3) Нюанс:
+`page.goto` на SPA Betano может реджектить при клиентском редиректе — обёрнуто в catch, событие ловим по URL в цикле;
+проверить вживую. **Нужно от владельца:** Octo на ВДС, UUID профиля Betano, подписка Base+. Полный план — память
+`surebet-octo-browser-plan`.
 
 **0.8.4 — все лиги в работе автоматически (модель исключений).** Включил спорт → бот сканирует ВСЕ его активные
 лиги сам (`getTournamentIds`, кэш 3ч → новые подхватываются), в панели лиги показаны списком (все включены),

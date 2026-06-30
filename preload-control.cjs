@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld("api", {
   getTournaments: (sportId) => ipcRenderer.invoke("get-tournaments", sportId),
   saveBookers: (list) => ipcRenderer.invoke("save-bookers", list),
   openBooker: (id) => ipcRenderer.invoke("open-booker", id),
+  openOcto: () => ipcRenderer.invoke("open-octo"),       // открыть профиль Betano в Octo (кнопка «Войти»)
+  testOcto: () => ipcRenderer.invoke("test-octo"),       // диагностика подключения к Octo
   randomizeFp: (id) => ipcRenderer.invoke("randomize-fp", id),
   randomizeUa: (id) => ipcRenderer.invoke("randomize-ua", id),
   checkProxy: (id) => ipcRenderer.invoke("check-proxy", id),

@@ -242,12 +242,71 @@ function fmtPlace(r) {
 
 async function renderBookers() {
   bookersCache = await window.api.getBookers();
+  const st = await window.api.getStatus();
+  const octoCfg = (st && st.settings) || {}; // octoProfileId / octoApiUrl / octoMode для карточки Betano
   const root = $("bookers");
   root.innerHTML = "";
   bookersCache.forEach((b) => {
     b.fp = b.fp || {};
     b.proxy = b.proxy || { protocol: "", host: "", port: "", user: "", pass: "" };
     b.login = b.login || { user: "", pass: "" };
+
+    // BETANO — Octo-режим: анонимка (прокси/UA/отпечаток) ВНУТРИ Octo-профиля. Здесь только UUID профиля,
+    // адрес Local API, логин/пароль конторы и тест простановки. «Войти» открывает профиль Betano в Octo.
+    if (b.id === "betano") {
+      const pidInput = el("input", { type: "text", value: octoCfg.octoProfileId || "", placeholder: "UUID профиля Betano из Octo" });
+      const apiInput = el("input", { type: "text", value: octoCfg.octoApiUrl || "http://127.0.0.1:58888" });
+      const exeInput = el("input", { type: "text", value: octoCfg.octoExePath || "", placeholder: "необяз.: путь к Octo.exe (если автозапуск не находит)" });
+      const octoStatus = el("div", { style: "font-size:12px; margin-top:4px; white-space:pre-wrap;",
+        textContent: octoCfg.octoProfileId ? "профиль задан — нажми «Войти», чтобы открыть в Octo" : "впиши UUID профиля из Octo и нажми «Войти»" });
+      const enterOcto = el("button", { textContent: "Войти (Octo)", onclick: async () => {
+        octoStatus.style.color = "#2980b9"; octoStatus.textContent = "сохраняю и открываю Octo (если закрыт — запущу)…";
+        await window.api.saveSettings({ octoProfileId: pidInput.value.trim(), octoApiUrl: apiInput.value.trim() || "http://127.0.0.1:58888", octoExePath: exeInput.value.trim(), octoMode: true });
+        await window.api.saveBookers(bookersCache); // сохранить логин/пароль Betano
+        try {
+          const r = await window.api.openOcto();
+          if (r && r.ok) { octoStatus.style.color = "#1a9e4b"; octoStatus.textContent = "✅ Octo открыт" + (r.url ? ": " + r.url : " (профиль запущен)"); }
+          else { octoStatus.style.color = "#c0392b"; octoStatus.textContent = "🔴 " + ((r && r.error) || "не удалось открыть Octo"); }
+        } catch (e) { octoStatus.style.color = "#c0392b"; octoStatus.textContent = "⚠️ " + e.message; }
+      } });
+      const octoBox = el("div", { className: "subbox" }, [
+        el("div", { className: "muted", textContent: "Octo Browser (антидетект) — прокси / UA / отпечаток внутри профиля. Если Octo закрыт — бот запустит его сам." }),
+        el("label", { textContent: "UUID профиля Octo (Betano)" }, [pidInput]),
+        el("label", { textContent: "Адрес Octo Local API" }, [apiInput]),
+        el("label", { textContent: "Путь к Octo.exe (необязательно)" }, [exeInput]),
+        octoStatus,
+      ]);
+      const loginBox = el("div", { className: "subbox" }, [
+        el("div", { className: "muted", textContent: "Аккаунт Betano (логин / пароль)" }),
+        el("div", { className: "grid2" }, [
+          field("Логин", b.login.user || "", (v) => (b.login.user = v)),
+          field("Пароль", b.login.pass || "", (v) => (b.login.pass = v)),
+        ]),
+      ]);
+      const stakeBox = el("input", { type: "text", placeholder: "сумма" }); stakeBox.style.maxWidth = "120px";
+      const dryResult = el("div", { className: "muted", textContent: "открой событие (value-цикл или вручную в Octo) → впиши сумму → тест" });
+      const dryRow = el("div", {}, [
+        el("div", { className: "row" }, [
+          stakeBox,
+          el("button", { className: "ghost", textContent: "Тест (dry-run)", onclick: async () => {
+            dryResult.textContent = "проверяю…";
+            try { dryResult.textContent = fmtPlace(await window.api.dryRunPlace(b.id, stakeBox.value.trim() || "10")); }
+            catch (e) { dryResult.textContent = "⚠️ " + e.message; }
+          } }),
+          el("button", { className: "ghost", textContent: "Снять купон", onclick: async () => {
+            const r = await window.api.captureBooker(b.id);
+            $("saveHint").textContent = r.ok ? "🧾 купон снят: " + r.file : "⚠️ " + r.error;
+          } }),
+        ]),
+        dryResult,
+      ]);
+      const card = el("details", { className: "booker", open: true }, [
+        el("summary", {}, [el("b", { textContent: (b.name || b.id) + " · Octo" })]),
+        enterOcto, octoBox, loginBox, dryRow,
+      ]);
+      root.append(card);
+      return; // карточку Betano собрали — общий (Electron) рендер пропускаем
+    }
 
     const enterBtn = el("button", { textContent: "Войти", onclick: async () => { await window.api.saveBookers(bookersCache); await window.api.openBooker(b.id); } });
 

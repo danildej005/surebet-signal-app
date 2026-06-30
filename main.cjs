@@ -18,6 +18,7 @@ const fx = require("./lib/fx.cjs");
 const { parseMoney, vilkaStakes } = require("./lib/vilka.cjs");
 const { scanAll } = require("./lib/valuescanner.cjs"); // value-режим: мультиспорт-сканер (эталон ps3838 / oddspapi)
 const oddsapi = require("./lib/oddspapi.cjs"); // клиент oddspapi (для списка лиг в панели)
+const octo = require("./lib/octo.cjs"); // Octo Browser (антидетект по API) — простановка на Betano вместо Electron-окна
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -38,7 +39,11 @@ let dedupe = null;
 let surebetWin = null;
 let dashboardWin = null; // дашборд value-режима (живой лог + статус); заменил окно surebet
 let panelWin = null;
-const bookerWins = new Map(); // id конторы → окно
+const bookerWins = new Map(); // id конторы → Electron-окно (наш антидетект)
+const octoWins = new Map();    // id конторы → адаптер Octo-страницы (puppeteer) под поверхность Electron-окна
+// Активная «поверхность» конторы для простановки: Octo-страница (если подключена) или Electron-окно.
+// Адаптер Octo мимикрирует win (см. lib/octo.pageWindow) → selectLegOutcome/placeBet работают без правок.
+function bookerWin(id) { const o = octoWins.get(id); if (o && !o.isDestroyed()) return o; return bookerWins.get(id); }
 const pendingBet = new Map(); // id конторы → { outcomeId, expectedOdds, desc } из последнего клика по плечу
 let lastBookerId = null;
 let tray = null;
@@ -270,6 +275,29 @@ async function openBookerProfile(profile, overrideUrl) {
   const target = overrideUrl || profile.url;
   if (target) win.loadURL(target);
   return win;
+}
+
+// OCTO-режим: подключиться к Octo-профилю (по UUID) через Local API + puppeteer и открыть URL. Адаптер
+// Octo-страницы кладём в octoWins → дальнейшая простановка (placeBet → bookerWin) идёт по нему БЕЗ правок.
+// Прокси/отпечаток/логин betano.bg — внутри Octo-профиля, наш Electron-антидетект тут НЕ задействован.
+async function openOctoBooker(profile, overrideUrl) {
+  if (!profile || !profile.id) return { ok: false, error: "контора не задана" };
+  if (!settings.octoProfileId) return { ok: false, error: "не задан UUID Octo-профиля (настройки)" };
+  const id = profile.id;
+  let win = octoWins.get(id);
+  if (!win || win.isDestroyed()) {
+    const r = await octo.connect(settings.octoProfileId, { apiBase: settings.octoApiUrl, exePath: settings.octoExePath });
+    if (!r.ok) { logger.log("ERROR", "Octo connect:", r.error); return { ok: false, error: r.error }; }
+    if (r.started) logger.log("INFO", "Octo: приложение запущено автоматически");
+    win = r.win; win.__browser = r.browser;
+    octoWins.set(id, win);
+    try { r.browser.on("disconnected", () => { octoWins.delete(id); logger.log("INFO", "Octo: соединение разорвано", id); }); } catch { /* ignore */ }
+    logger.log("INFO", "Octo подключён:", id, "uuid:", String(settings.octoProfileId).slice(0, 8) + "…", "ws:", String(r.wsEndpoint).slice(0, 40));
+  }
+  lastBookerId = id;
+  const target = overrideUrl || profile.url;
+  if (target) await win.loadURL(target).catch((e) => logger.log("WARN", "Octo goto:", e.message));
+  return { ok: true, win };
 }
 
 // Регэксп домена конторы (для определения, что редирект дошёл до неё).
@@ -552,7 +580,7 @@ async function dismissConsent(win) {
 
 // Шаг 1: выбрать исход в купоне конторы + прочитать максимум. Сумму НЕ вписывает.
 async function selectLegOutcome(id) {
-  const win = bookerWins.get(id);
+  const win = bookerWin(id);
   if (!win || win.isDestroyed()) return { ok: false, error: "окно конторы не открыто" };
   const cfg = BETSLIP[id];
   if (!cfg) return { ok: false, error: "нет разметки купона «" + id + "»" };
@@ -651,7 +679,7 @@ async function selectLegOutcome(id) {
 // копил «осиротевшие» ставки от скипнутых циклов (иначе Betano собирает экспресс → MAX/сумма ломаются).
 async function deselectLeg(id, index) {
   if (index == null) return;
-  const win = bookerWins.get(id), cfg = BETSLIP[id];
+  const win = bookerWin(id), cfg = BETSLIP[id];
   if (!win || win.isDestroyed() || !cfg || !cfg.outcomeSel) return;
   try {
     await win.webContents.executeJavaScript(`(() => { const els = [...document.querySelectorAll(${JSON.stringify(cfg.outcomeSel)})]; const el = els[${Number(index)}]; if (el) { el.click(); return true; } return false; })()`);
@@ -1168,8 +1196,15 @@ async function runValueCycle(c, live) {
   const booker = findBooker("betano");
   if (!booker) return { ok: false, error: "контора betano не настроена" };
   pendingBet.set("betano", { outcomeId: c.outcomeId, expectedOdds: c.expectedOdds, desc: c.desc, descFull: c.subject || c.desc, subject: c.subject });
-  await openBookerProfile(booker, c.url).catch((e) => logger.log("WARN", "value openBooker:", e));
-  const w = bookerWins.get("betano");
+  // Octo-режим: антидетект/прокси/логин — внутри Octo-профиля, открываем betano.bg в Octo-странице.
+  // Иначе — наш Electron-антидетект (запасной путь). Адаптер кладётся в octoWins → placeBet берёт его через bookerWin.
+  if (settings.octoMode) {
+    const r0 = await openOctoBooker(booker, c.url).catch((e) => ({ ok: false, error: e.message }));
+    if (r0 && r0.ok === false) return { ok: false, error: "Octo: " + r0.error };
+  } else {
+    await openBookerProfile(booker, c.url).catch((e) => logger.log("WARN", "value openBooker:", e));
+  }
+  const w = bookerWin("betano");
   let onEvent = false;
   for (let i = 0; i < 15; i++) {
     await sleep(1000);
@@ -1343,6 +1378,13 @@ function maskedSettings() {
     valueSports: settings.valueSports || [],
     valueMarkets: settings.valueMarkets || [],
     hasPs3838: !!settings.ps3838Auth,
+    // OCTO Browser (антидетект для Betano)
+    octoMode: !!settings.octoMode,
+    octoApiUrl: settings.octoApiUrl || "http://127.0.0.1:58888",
+    octoProfileId: settings.octoProfileId || "",  // UUID профиля — видим (его машина)
+    octoExePath: settings.octoExePath || "",      // путь к Octo.exe для автозапуска
+    octoToken: settings.octoToken || "",          // токен Cloud API — видим
+    hasOctoToken: !!settings.octoToken,
   };
 }
 
@@ -1647,6 +1689,12 @@ ipcMain.handle("save-settings", (_e, patch) => {
   if (patch.valueMaxPerDay !== undefined) clean.valueMaxPerDay = Math.max(0, Number(patch.valueMaxPerDay) || 0);
   if (patch.valueRefSource === "ps3838" || patch.valueRefSource === "oddspapi") clean.valueRefSource = patch.valueRefSource;
   if (typeof patch.ps3838Auth === "string" && patch.ps3838Auth.trim()) clean.ps3838Auth = patch.ps3838Auth.trim(); // секрет: пустой не затирает
+  // OCTO Browser
+  if (typeof patch.octoMode === "boolean") clean.octoMode = patch.octoMode;
+  if (typeof patch.octoApiUrl === "string") clean.octoApiUrl = octo.apiBase(patch.octoApiUrl);
+  if (typeof patch.octoProfileId === "string") clean.octoProfileId = patch.octoProfileId.trim();
+  if (typeof patch.octoExePath === "string") clean.octoExePath = patch.octoExePath.trim();
+  if (typeof patch.octoToken === "string" && patch.octoToken.trim()) clean.octoToken = patch.octoToken.trim(); // секрет: пустой не затирает
   settings = settingsStore.save(clean);
   startupSent = false;
   startLoop();
@@ -1676,6 +1724,30 @@ ipcMain.handle("test-telegram", async () => {
   const res = await tg("✅ Проверка: Surebet Signal на связи.");
   logger.log(res.ok ? "INFO" : "WARN", "тест Telegram:", res.ok ? "ok" : res.error, "| база:", settings.tgApiBase);
   return res;
+});
+// Кнопка «Войти» (Betano) в Octo-режиме: стартовать профиль Betano в Octo по UUID и открыть betano.bg.
+// Профиль персистентный (логин/анонимка внутри Octo). Соединение кладётся в octoWins → дальнейшая простановка идёт по нему.
+ipcMain.handle("open-octo", async () => {
+  const booker = findBooker("betano");
+  if (!booker) return { ok: false, error: "контора betano не настроена" };
+  if (!settings.octoProfileId) return { ok: false, error: "впиши UUID профиля Octo и сохрани" };
+  const r = await openOctoBooker(booker, booker.url || null);
+  if (!r.ok) return r;
+  let url = ""; try { url = r.win.webContents.getURL(); } catch { /* ignore */ }
+  return { ok: true, url };
+});
+// Диагностика Octo: подключиться к профилю по UUID (Local API + puppeteer) и вернуть статус.
+// Соединение остаётся в octoWins (переиспользуется простановкой). Профиль НЕ останавливаем (персистентный).
+ipcMain.handle("test-octo", async () => {
+  if (!settings.octoProfileId) return { ok: false, error: "не задан UUID Octo-профиля" };
+  try {
+    const active = await octo.listActive({ apiBase: settings.octoApiUrl });
+    const booker = findBooker("betano") || { id: "betano" };
+    const r = await openOctoBooker(booker, null);
+    if (!r.ok) return { ok: false, error: r.error, active };
+    let url = ""; try { url = r.win.webContents.getURL(); } catch { /* ignore */ }
+    return { ok: true, url, active, wasActive: active.includes(String(settings.octoProfileId)) };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle("logout-surebet", async () => {
   try { await session.fromPartition(PARTITION).clearStorageData(); if (surebetWin) surebetWin.loadURL(SUREBET_URL); return { ok: true }; }
