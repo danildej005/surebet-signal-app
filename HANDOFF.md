@@ -4,7 +4,14 @@
 > сжатия контекста. Секретов тут НЕТ (токен/прокси-пароли хранятся в приложении шифрованно).
 
 Репозиторий: **github.com/danildej005/surebet-signal-app** (публичный).
-Текущая версия: **0.9.0** (собрана/опубликована 2026-07-01). Релизы — вручную с Mac → GitHub Releases.
+Текущая версия: **0.9.1** (собрана/опубликована 2026-07-01). Релизы — вручную с Mac → GitHub Releases.
+
+**0.9.1 — ФИКС загрузки puppeteer-core (Octo не подключался).** В 0.9.0 логи ВДС: `Octo connect: не установлен
+puppeteer-core` — профиль открывался (Local API), но управление страницей не подключалось. Причина: puppeteer-core 25.x
+— чистый ESM (`"type":"module"`), а main-процесс Electron 33 = CJS на Node 20.18 (без require(ESM)) → `require()` падал
+`ERR_REQUIRE_ESM`, а мой catch врал «не установлен». Фикс: грузим через динамический `import()` (`mod.default||mod`),
+показываем реальную ошибку; + `asarUnpack` puppeteer-core и ESM-зависимостей (надёжность import из asar). На маке баг
+не всплыл — там нода новее (умеет require(esm)). Тесты 144/144.
 
 **0.9.0 — Octo Browser (антидетект) для Betano + автозапуск.** Карточка Betano переделана: кнопка «Войти (Octo)»
 стартует профиль Betano в Octo по UUID (Local API `:58888` → `ws_endpoint` → puppeteer-core) и открывает betano.bg;
