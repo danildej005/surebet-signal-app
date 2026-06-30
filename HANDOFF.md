@@ -13,6 +13,17 @@
 BG/София, но это **датацентр M247** (ip-api: `proxy:true, hosting:true`) → Betano банит датацентр/VPN. Владелец
 считает, что дело не в этом (был бы лаг). Гео-диаг покажет, нет ли вдобавок утечки WebRTC (реальный IP ВДС —
 Hetzner DE `138.201.85.223`) или несоответствия. Вероятный фикс: residential BG-прокси вместо датацентрового.
+ПРИМ.: позже гео-блок betano.bg перестал воспроизводиться (был временный).
+
+**🔜 СЛЕДУЮЩИЙ КРУПНЫЙ ШАГ — Octo Browser вместо нашего Electron-антидетекта (решение владельца 2026-06-30).**
+Наш «честный Electron» упирается в антифрод Betano; Octo — настоящий антидетект. Владелец создаёт профиль в Octo,
+мы подключаемся по API по UUID. Octo Local API `http://localhost:58888` (Octo должен быть запущен на ВДС) → старт
+профиля с `debug_port` → `ws_endpoint` → `puppeteer-core.connect`. Прокси residential BG и отпечаток — ВНУТРИ
+Octo-профиля (наш proxyBridge/fingerprint не нужны). Профиль персистентный (логин betano.bg не сбрасывается).
+Интеграция: `lib/octo.cjs` (start/stop+connect), переплести простановку (selectLegOutcome/fillStake/clickPlace/
+runValueCycle) на Octo-page (`page.evaluate`/`page.goto`) вместо Electron `win.webContents`; value-движок/сканер/
+oddspapi/ps3838 — без изменений. Нужно от владельца: Octo запущен+залогинен на ВДС, API-токен, UUID профиля Betano
+(залогинен в betano.bg), подписка Base+. **Полный план — память проекта `surebet-octo-browser-plan`.**
 
 **0.8.4 — все лиги в работе автоматически (модель исключений).** Включил спорт → бот сканирует ВСЕ его активные
 лиги сам (`getTournamentIds`, кэш 3ч → новые подхватываются), в панели лиги показаны списком (все включены),
