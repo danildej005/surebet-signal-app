@@ -314,6 +314,14 @@ async function renderBookers() {
     det.append(el("button", { className: "ghost", textContent: "Рандом отпечатка", onclick: async () => { await window.api.randomizeFp(b.id); renderBookers(); } }));
 
     const actions = el("div", { className: "row" }, [
+      el("button", { className: "ghost", textContent: "🌍 Гео-диаг", onclick: async () => {
+        $("saveHint").textContent = "гео-диагностика…";
+        try {
+          const r = await window.api.geoDiag(b.id);
+          if (!r || r.error) { $("saveHint").textContent = "⚠️ " + ((r && r.error) || "ошибка"); return; }
+          $("saveHint").textContent = "🌍 WebRTC: " + r.webrtc + " | гео: " + r.geo + " | язык: " + r.lang + " | tz: " + r.tz + " | IP через прокси: " + r.ipЧерезПрокси;
+        } catch (e) { $("saveHint").textContent = "⚠️ " + e.message; }
+      } }),
       el("button", { className: "ghost", textContent: "Снять купон", onclick: async () => {
         const r = await window.api.captureBooker(b.id);
         $("saveHint").textContent = r.ok ? "🧾 купон «" + (b.name || b.id) + "» снят: " + r.file : "⚠️ " + r.error;

@@ -1753,6 +1753,25 @@ ipcMain.handle("check-proxy", async (_e, id) => {
 });
 ipcMain.handle("get-fx", async () => { await refreshFx(); return fxRate; });
 ipcMain.handle("capture-booker", async (_e, id) => await captureBooker(id));
+// ГЕО-ДИАГНОСТИКА окна конторы: что РЕАЛЬНО видит сайт — WebRTC-IP (утечка реального IP ВДС?),
+// geolocation, язык, таймзона + IP сессии через прокси. Помогает локализовать «гео неверно».
+ipcMain.handle("geo-diag", async (_e, id) => {
+  const win = bookerWins.get(id);
+  if (!win || win.isDestroyed()) return { error: "окно конторы не открыто" };
+  try {
+    const r = await win.webContents.executeJavaScript(`(async () => {
+      const out = { url: location.href.slice(0,80), lang: navigator.language, langs: (navigator.languages||[]).join(","), tz: Intl.DateTimeFormat().resolvedOptions().timeZone };
+      out.geo = await new Promise((res) => { try { if(!navigator.geolocation) return res("нет geolocation"); navigator.geolocation.getCurrentPosition(p=>res(p.coords.latitude.toFixed(2)+","+p.coords.longitude.toFixed(2)), e=>res("err:"+(e.message||e.code)), {timeout:5000,maximumAge:0}); } catch(e){ res("err:"+e); } });
+      out.webrtc = await new Promise((res) => { try { const ips=new Set(); const pc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]}); pc.createDataChannel("d"); pc.onicecandidate=(e)=>{ if(!e||!e.candidate){ res([...ips].join(" ")||"нет"); try{pc.close();}catch(_){} return;} const m=(e.candidate.candidate||"").match(/([0-9]{1,3}\\.){3}[0-9]{1,3}/); if(m) ips.add(m[0]); }; pc.createOffer().then(o=>pc.setLocalDescription(o)).catch(()=>{}); setTimeout(()=>{ res([...ips].join(" ")||"нет"); try{pc.close();}catch(_){}}, 5000); } catch(e){ res("err:"+e); } });
+      return out;
+    })()`);
+    let sessIp = null;
+    try { const ses = win.webContents.session; sessIp = await ipViaSession(ses, ses.__creds); } catch (e) { sessIp = "?"; }
+    const out = { ok: true, ...r, ipЧерезПрокси: sessIp };
+    logger.log("INFO", "ГЕО-ДИАГ " + id + ": " + JSON.stringify(out).slice(0, 700));
+    return out;
+  } catch (e) { return { error: e.message }; }
+});
 ipcMain.handle("dry-run-place", async (_e, id, stake) => await placeBet(id, stake, false));
 ipcMain.handle("place-bet", async (_e, id, stake) => {
   if (!settings.liveMode) return { ok: false, error: "боевой режим ВЫКЛ — включи тумблер, чтобы ставить реально" };

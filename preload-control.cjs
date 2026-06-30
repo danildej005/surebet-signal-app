@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("api", {
   checkProxy: (id) => ipcRenderer.invoke("check-proxy", id),
   resetBookerData: (id) => ipcRenderer.invoke("reset-booker-data", id),
   captureBooker: (id) => ipcRenderer.invoke("capture-booker", id),
+  geoDiag: (id) => ipcRenderer.invoke("geo-diag", id),
   dryRunPlace: (id, stake) => ipcRenderer.invoke("dry-run-place", id, stake),
   placeBet: (id, stake) => ipcRenderer.invoke("place-bet", id, stake),
   getFx: () => ipcRenderer.invoke("get-fx"),
