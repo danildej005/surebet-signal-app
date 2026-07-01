@@ -1226,6 +1226,23 @@ async function valueScanAndPlace(live) {
     if (valueDay !== today) { valueDay = today; valueCount = 0; }
     const max = Number(settings.valueMaxPerDay) || 0;
     if (valueCount >= max) { logger.log("INFO", "[value] лимит ставок/сутки достигнут (" + valueCount + ")"); sendValuePulse({ scanning: false, placedToday: valueCount, max, note: "лимит/сутки" }); return; }
+    // Стартовая сводка скана: какие ключи заданы, какие спорты включены, эталон, порог — чтобы видеть
+    // конфигурацию до запросов (частая причина «0 кандидатов» — не включён спорт или нет ключа).
+    const onSports = (settings.valueSports || []).filter((s) => s && s.on !== false).map((s) => s.name || s.key);
+    logger.log("INFO", "[value] СКАН старт | oddspapi:" + (settings.oddsApiKey ? "есть" : "НЕТ") + " ps3838:" + (settings.ps3838Auth ? "есть" : "НЕТ") +
+      " | эталон:" + (settings.valueRefSource || "ps3838") + " | порог:" + ((Number(settings.valueThreshold) || 0.05) * 100).toFixed(1) + "%" +
+      " | спорты вкл: " + (onSports.length ? onSports.join(", ") : "НЕТ (включи спорт в панели!)"));
+    // Пошаговая диагностика воронки: каждый этап печатает числа ответа / ошибку. Видно, есть ли фид,
+    // дошёл ли запрос, что вернулось, где обнулилось.
+    const onDiag = (d) => {
+      if (d.enabled != null) { if (!d.enabled) logger.log("WARN", "[value] НИ ОДИН спорт не включён — включи спорт в панели"); return; }
+      const sp = d.sport ? d.sport + " " : "";
+      if (d.error) { logger.log("WARN", "[value]   " + sp + (d.step || "?") + ": 🔴 " + d.error); return; }
+      const parts = [];
+      for (const k of ["n", "withPin", "pinnacle", "betano", "fair", "matched", "cand"]) if (d[k] != null) parts.push(k + "=" + d[k]);
+      if (d.best != null) parts.push("лучший value=" + (d.best * 100).toFixed(1) + "%");
+      logger.log("INFO", "[value]   " + sp + (d.step || "?") + ": " + parts.join(" "));
+    };
     const cands = await scanAll(settings.oddsApiKey, settings.ps3838Auth, {
       sports: settings.valueSports || [],
       refSource: settings.valueRefSource || "ps3838",
@@ -1234,6 +1251,7 @@ async function valueScanAndPlace(live) {
       markets: settings.valueMarkets || [],
       oddsMin: Number(settings.valueOddsMin) || 0,
       oddsMax: Number(settings.valueOddsMax) || 0,
+      onDiag,
     });
     const fresh = cands.filter((c) => !triedValue.has(c.eventId + "|" + c.marketId + "|" + c.outcomeId));
     logger.log("INFO", "[value] кандидатов: " + cands.length + " | новых: " + fresh.length + (cands[0] ? " | топ +" + (cands[0].valuePct * 100).toFixed(1) + "%" : ""));
