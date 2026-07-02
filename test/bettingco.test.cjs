@@ -1,0 +1,146 @@
+"use strict";
+// Тесты чистой логики live-value bettingco: матч событий по именам, парс исходов Betano/Pinnacle,
+// de-vig и расчёт value с отсечкой артефактов. Форма данных — как в реальном фиде (проверено вживую).
+const test = require("node:test");
+const assert = require("node:assert");
+const bc = require("../lib/bettingco.cjs");
+
+const near = (a, b, e = 1e-3) => Math.abs(a - b) <= e;
+
+test("matchEvents: матч по именам без учёта порядка/регистра/акцентов", () => {
+  const B = { g1: { team1NameEn: "Alex de Minaur", team2NameEn: "Adrian Mannarino", textId: "/B/1" } };
+  const P = { g9: { team1NameEn: "Adrian Mannarino", team2NameEn: "Alex De Minaur", textId: "/P/9" } };
+  const m = bc.matchEvents(B, P);
+  assert.equal(m.length, 1);
+  assert.equal(m[0].b.textId, "/B/1");
+  assert.equal(m[0].p.textId, "/P/9");
+});
+
+test("devig2: снимает маржу, сумма вероятностей 1", () => {
+  const [a, b] = bc.devig2(1.5, 2.5);
+  assert.ok(near(a + b, 1));
+  assert.ok(a > b); // фаворит вероятнее
+  assert.ok(near(a, (1 / 1.5) / (1 / 1.5 + 1 / 2.5)));
+});
+
+test("pinnacleOutcomes: парс структурной meta (ML/TOTAL/SPREAD), только полный матч", () => {
+  const mk = [
+    { surebetTextId: "/Main/Main", meta: "111|0|MONEYLINE|TEAM1||0|3", marketValue: 1.017, marketParameter: 0 },
+    { surebetTextId: "/Main/Main", meta: "111|0|MONEYLINE|TEAM2||0|3", marketValue: 25.36, marketParameter: 0 },
+    { surebetTextId: "/Main/Main/Game", meta: "111|0|TOTAL_POINTS||OVER|27.5|3", marketValue: 1.72, marketParameter: 27.5 },
+    { surebetTextId: "/Main/Main/Game", meta: "111|0|TOTAL_POINTS||UNDER|27.5|3", marketValue: 2.02, marketParameter: 27.5 },
+    { surebetTextId: "/Set/Game/3|5", meta: "111|36|MONEYLINE|TEAM1||0|3", marketValue: 2.82, marketParameter: 0 }, // подсегмент — игнор
+  ];
+  const o = bc.pinnacleOutcomes(mk);
+  assert.deepEqual(o["/Main/Main|ML|"], { A: 1.017, B: 25.36 });
+  assert.deepEqual(o["/Main/Main/Game|TOTAL|27.5"], { A: 1.72, B: 2.02 });
+  assert.ok(!Object.keys(o).some((k) => k.includes("/Set/"))); // in-play подсегмент отсеян
+});
+
+test("betanoOutcomes: парс человекочитаемой meta + отсев персональных тоталов", () => {
+  const mk = [
+    { surebetTextId: "/Main/Main", meta: "Winner | Alex de Minaur", marketValue: 1.02 },
+    { surebetTextId: "/Main/Main", meta: "Winner | Adrian Mannarino", marketValue: 12.5 },
+    { surebetTextId: "/Main/Main/Game", meta: "Games | Over 27.5", marketValue: 1.72, marketParameter: 27.5 },
+    { surebetTextId: "/Main/Main/Game", meta: "Games | Under 27.5", marketValue: 2.02, marketParameter: 27.5 },
+    { surebetTextId: "/Main/Main/Game", meta: "Alex de Minaur Games Won | Over 20.5", marketValue: 2.95, marketParameter: 20.5 }, // персональный — отсечь
+  ];
+  const o = bc.betanoOutcomes(mk, "Alex de Minaur", "Adrian Mannarino");
+  assert.deepEqual(o["/Main/Main|ML|"], { A: 1.02, B: 12.5 });
+  assert.deepEqual(o["/Main/Main/Game|TOTAL|27.5"], { A: 1.72, B: 2.02 });
+  // персональный тотал с именем игрока НЕ должен создать /Main/Main/Game|TOTAL|20.5
+  assert.ok(!o["/Main/Main/Game|TOTAL|20.5"]);
+});
+
+test("valueForEvent: манилайн де Минаура → отрицательный value (маржа Betano), в сигналы не идёт", () => {
+  const B = [
+    { surebetTextId: "/Main/Main", meta: "Winner | Alex de Minaur", marketValue: 1.02 },
+    { surebetTextId: "/Main/Main", meta: "Winner | Adrian Mannarino", marketValue: 12.5 },
+  ];
+  const P = [
+    { surebetTextId: "/Main/Main", meta: "1|0|MONEYLINE|TEAM1||0|3", marketValue: 1.017, marketParameter: 0 },
+    { surebetTextId: "/Main/Main", meta: "1|0|MONEYLINE|TEAM2||0|3", marketValue: 25.36, marketParameter: 0 },
+  ];
+  const all = bc.valueForEvent(B, P, "Alex de Minaur", "Adrian Mannarino", { threshold: -1, maxPlausible: 99 });
+  const ml = all.find((s) => s.kind === "ML" && s.side === "A");
+  assert.ok(ml.value < 0 && ml.value > -0.05, "де Минаур ~ −1.9% (Betano чуть хуже fair)");
+  // при боевом пороге сигналов нет
+  assert.equal(bc.valueForEvent(B, P, "Alex de Minaur", "Adrian Mannarino", { threshold: 0.02 }).length, 0);
+});
+
+test("valueForEvent: реальный value проходит, артефакт (>maxPlausible) режется", () => {
+  const B = [
+    { surebetTextId: "/Main/Main", meta: "Winner | A", marketValue: 2.20 },
+    { surebetTextId: "/Main/Main", meta: "Winner | B", marketValue: 1.75 },
+  ];
+  const P = [ // Pinnacle fair A ≈ 0.5 → Betano 2.20 даёт +10% (реальный value)
+    { surebetTextId: "/Main/Main", meta: "1|0|MONEYLINE|TEAM1||0|3", marketValue: 2.0, marketParameter: 0 },
+    { surebetTextId: "/Main/Main", meta: "1|0|MONEYLINE|TEAM2||0|3", marketValue: 2.0, marketParameter: 0 },
+  ];
+  const sigs = bc.valueForEvent(B, P, "A", "B", { threshold: 0.02, maxPlausible: 0.25 });
+  assert.equal(sigs.length, 1);
+  assert.equal(sigs[0].side, "A");
+  assert.ok(near(sigs[0].value, 0.10, 2e-2));
+  // тот же расчёт, но артефактный кэф Betano 5.0 (мисматч) → value ~ +150% режется maxPlausible
+  const B2 = [{ surebetTextId: "/Main/Main", meta: "Winner | A", marketValue: 5.0 }, { surebetTextId: "/Main/Main", meta: "Winner | B", marketValue: 1.75 }];
+  assert.equal(bc.valueForEvent(B2, P, "A", "B", { threshold: 0.02, maxPlausible: 0.25 }).length, 0);
+});
+
+// ── Снимки (модель сессии): накат дельт + сборка состояния + разбор ответа опроса ──
+
+test("applySnapshot: рынки added/updated/removed + возврат writeTime", () => {
+  const state = { games: {}, markets: { "/m/keep": { textId: "/m/keep", marketValue: 1.5 }, "/m/del": { textId: "/m/del", marketValue: 2.0 } } };
+  const wt = bc.applySnapshot(state, {
+    writeTime: "2026-07-02T10:00:00Z",
+    marketsAdded: [{ textId: "/m/new", marketModel: { textId: "/m/new", marketValue: 3.3 } }],
+    marketsUpdated: [{ textId: "/m/keep", marketModel: { textId: "/m/keep", marketValue: 1.9 } }],
+    marketsRemoved: [{ textId: "/m/del" }],
+  });
+  assert.equal(wt, "2026-07-02T10:00:00Z");
+  assert.equal(state.markets["/m/new"].marketValue, 3.3);   // added
+  assert.equal(state.markets["/m/keep"].marketValue, 1.9);  // updated: кэф сменился
+  assert.ok(!state.markets["/m/del"]);                      // removed
+});
+
+test("applySnapshot: игры — точечный апдейт счёта, полная замена, удаление", () => {
+  const state = { games: { "/g/1": { textId: "/g/1", team1NameEn: "A", team2NameEn: "B", currentScore: "0-0" }, "/g/del": { textId: "/g/del" } }, markets: {} };
+  bc.applySnapshot(state, {
+    gamesAdded: [{ textId: "/g/2", gameModel: { textId: "/g/2", team1NameEn: "C", team2NameEn: "D" } }],
+    gamesUpdated: [{ textId: "/g/1", gameModel: null, currentScore: "1-0", statusType: 1 }],
+    gamesRemoved: [{ textId: "/g/del" }],
+  });
+  assert.equal(state.games["/g/2"].team1NameEn, "C");       // added
+  assert.equal(state.games["/g/1"].currentScore, "1-0");    // счёт обновился
+  assert.equal(state.games["/g/1"].team1NameEn, "A");       // объект цел (имена не потеряны)
+  assert.equal(state.games["/g/1"].statusType, 1);
+  assert.ok(!state.games["/g/del"]);                        // removed
+});
+
+test("stateFromData: словари + sessionGuid + курсор + начальные снимки применены", () => {
+  const data = {
+    gamesOriginModel: { writeTime: "2026-07-02T10:00:00Z", model: { "/g/1": { textId: "/g/1", team1NameEn: "A", team2NameEn: "B" } } },
+    marketsOriginModel: { writeTime: "2026-07-02T10:00:00Z", model: { "/m/1": { textId: "/m/1", marketValue: 1.5 } } },
+    snapshots: [{ writeTime: "2026-07-02T10:00:01Z", sessionGuid: "SG-1",
+      marketsAdded: [], marketsUpdated: [{ textId: "/m/1", marketModel: { textId: "/m/1", marketValue: 1.8 } }], marketsRemoved: [],
+      gamesAdded: [], gamesUpdated: [], gamesRemoved: [] }],
+  };
+  const st = bc.stateFromData("Betano", data);
+  assert.equal(st.sessionGuid, "SG-1");
+  assert.equal(st.cursor, "2026-07-02T10:00:01Z");          // максимальный writeTime снимка
+  assert.equal(st.markets["/m/1"].marketValue, 1.8);        // начальный снимок применён
+  assert.ok(st.games["/g/1"]);
+});
+
+test("applySnapshotsResponse: mismatch / rate / нормальные дельты / пусто", () => {
+  const mk = () => ({ games: {}, markets: { "/m/1": { textId: "/m/1", marketValue: 1.5 } }, cursor: "2026-07-02T10:00:00Z" });
+  assert.deepEqual(bc.applySnapshotsResponse(mk(), { error: "SessionId mismatch. Expected..." }), { applied: 0, mismatch: true, rate: false });
+  assert.equal(bc.applySnapshotsResponse(mk(), { rate: true }).rate, true);
+  const st = mk();
+  const r = bc.applySnapshotsResponse(st, { snapshots: [{ writeTime: "2026-07-02T10:00:02Z", marketsUpdated: [{ textId: "/m/1", marketModel: { textId: "/m/1", marketValue: 2.2 } }] }] });
+  assert.equal(r.applied, 1);
+  assert.equal(st.markets["/m/1"].marketValue, 2.2);        // дельта применилась
+  assert.equal(st.cursor, "2026-07-02T10:00:02Z");          // курсор продвинулся
+  const st2 = mk();
+  assert.equal(bc.applySnapshotsResponse(st2, { snapshots: [] }).applied, 0);
+  assert.equal(st2.cursor, "2026-07-02T10:00:00Z");         // пусто → курсор не двинулся
+});
