@@ -19,6 +19,7 @@ const { parseMoney, vilkaStakes } = require("./lib/vilka.cjs");
 const { scanAll } = require("./lib/valuescanner.cjs"); // value-режим: мультиспорт-сканер (эталон ps3838 / oddspapi)
 const oddsapi = require("./lib/oddspapi.cjs"); // клиент oddspapi (для списка лиг в панели)
 const octo = require("./lib/octo.cjs"); // Octo Browser (антидетект по API) — простановка на Betano вместо Electron-окна
+const { ValueLiveEngine } = require("./lib/valuelive.cjs"); // движок LIVE-value на фиде bettingco (Betano+Pinnacle синхронно)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -1173,6 +1174,67 @@ let valueDay = "";            // дата для суточного лимита
 let valueCount = 0;           // поставлено сегодня
 let valuePulseState = { on: false }; // статус value для шапки панели
 
+// ── Движок LIVE-value на фиде bettingco (Betano+Pinnacle синхронно, снимки ~1с). ТОЛЬКО ДЕТЕКЦИЯ ──
+// Простановка через Octo — отдельная фаза; здесь движок держит сессии, сканит и толкает сигналы в панель.
+let valueEngine = null, valueEngineTimer = null, valueEngineBusy = false, valueEngineStarting = false;
+const liveSignals = new Map(); // ключ сигнала → {first,last,count,maxValue,desc,value,...} (для дедупа + живучести)
+
+async function startValueEngine() {
+  // Условие работы: включён value + задан ключ Betano-фида. Иначе — остановить.
+  if (!settings.valueMode || !settings.bettingcoKey) { stopValueEngine(); return; }
+  if (valueEngine || valueEngineStarting) return; // уже поднят/поднимается
+  valueEngineStarting = true;
+  sendValuePulse({ on: true, live: !!settings.valueLive, scanning: true, error: "", note: "инициализация bettingco…" });
+  try {
+    const eng = new ValueLiveEngine(settings.bettingcoKey, {});
+    await eng.init();
+    valueEngine = eng;
+    const c = eng.counts();
+    logger.log("INFO", "[value] движок bettingco поднят: Betano игр " + c.games + " | Pinnacle игр " + c.pinGames);
+    sendValuePulse({ scanning: false, note: "", matched: null });
+    valueEngineTimer = setInterval(() => { valueEngineTick().catch((e) => logger.log("ERROR", "value-engine:", e && e.message)); }, 1500);
+  } catch (e) {
+    logger.log("ERROR", "[value] движок bettingco не поднялся:", e && e.message);
+    sendValuePulse({ scanning: false, error: "bettingco: " + (e && e.message) });
+  } finally { valueEngineStarting = false; }
+}
+
+function stopValueEngine() {
+  if (valueEngineTimer) { clearInterval(valueEngineTimer); valueEngineTimer = null; }
+  valueEngine = null; liveSignals.clear();
+}
+
+// Один цикл движка: опрос обеих книг (снимки) → скан value → дедуп + живучесть → пульс в панель.
+async function valueEngineTick() {
+  if (valueEngineBusy || !valueEngine || botBusy) return;
+  valueEngineBusy = true;
+  try {
+    const st = await valueEngine.poll();
+    if (!st.ok) { sendValuePulse({ note: st.reinit ? "переинициализация плеча…" : (st.rate ? "rate-limit…" : "") }); return; }
+    const sigs = valueEngine.scan({
+      threshold: Number(settings.valueThreshold) || 0.03, maxPlausible: 0.25,
+      markets: settings.valueMarkets || [], oddsMin: Number(settings.valueOddsMin) || 0, oddsMax: Number(settings.valueOddsMax) || 0,
+    });
+    const now = Date.now();
+    for (const s of sigs) {
+      const k = s.t1 + "~" + s.t2 + "|" + s.market + "|" + s.side;
+      const e = liveSignals.get(k);
+      if (e) { e.last = now; e.count++; e.maxValue = Math.max(e.maxValue, s.value); e.value = s.value; e.betanoOdds = s.betanoOdds; }
+      else {
+        liveSignals.set(k, { first: now, last: now, count: 1, maxValue: s.value, value: s.value, betanoOdds: s.betanoOdds, desc: s.t1 + " vs " + s.t2 + " · " + s.market + " " + s.side, league: s.league, link: s.link });
+        logger.log("INFO", "[value] 🎯 +" + (s.value * 100).toFixed(1) + "% | " + s.t1 + " vs " + s.t2 + " | " + s.market + " " + s.side + " | Bet " + s.betanoOdds + " vs fair " + s.fair.toFixed(3) + " | " + s.league);
+      }
+    }
+    // почистить сигналы, которых не было в этом скане > 20с (пропали с доски)
+    for (const [k, e] of liveSignals) if (now - e.last > 20000) liveSignals.delete(k);
+    const top = sigs[0] || null;
+    sendValuePulse({ on: true, live: !!settings.valueLive, scanning: false, error: "",
+      candidates: sigs.length, top: top ? top.value : null, ageMs: Math.round((st.ageB + st.ageP) / 2),
+      lastBet: top ? (top.t1 + " vs " + top.t2 + " · " + top.market + " " + top.side + " +" + (top.value * 100).toFixed(1) + "%") : "" });
+  } catch (e) { logger.log("ERROR", "[value] цикл движка:", e && e.message); sendValuePulse({ error: e && e.message }); }
+  finally { valueEngineBusy = false; }
+}
+
 // Толкнуть статистику value в шапку панели (мердж с предыдущим состоянием).
 function sendValuePulse(extra) {
   valuePulseState = { ...valuePulseState, ...(extra || {}), at: Date.now() };
@@ -1512,12 +1574,10 @@ async function watchdog(text) {
 }
 
 async function tick() {
-  // ── VALUE-режим: работает НЕЗАВИСИМО от surebet (окна surebet больше нет) ──
-  if (!valueBusy) sendValuePulse({ on: !!settings.valueMode, live: !!settings.valueLive });
-  if (settings.valueMode && settings.oddsApiKey && !botBusy && !valueBusy && Date.now() - lastValueScan > 60000) {
-    lastValueScan = Date.now();
-    valueScanAndPlace(!!settings.valueLive).catch((e) => logger.log("ERROR", "value:", e && e.message));
-  }
+  // ── LIVE-value (bettingco): движок крутится на своём таймере (startValueEngine, ~1с). Тут — страховка
+  // старта/остановки по настройкам (valueMode + ключ Betano-фида). Старый oddspapi/ps3838-путь отключён. ──
+  if (settings.valueMode && settings.bettingcoKey) { if (!valueEngine && !valueEngineStarting) startValueEngine().catch(() => {}); }
+  else { if (valueEngine || valueEngineTimer || valueEngineStarting) stopValueEngine(); if (!valueBusy) sendValuePulse({ on: false }); }
   // ── surebet-фид (legacy): окно surebet больше не создаётся → блок ниже не выполняется ──
   if (!running || !surebetWin || surebetWin.isDestroyed()) return;
   const r = await readSurebet(surebetWin.webContents);
@@ -1688,6 +1748,8 @@ function startLoop() {
   timer = setInterval(() => { tick().catch((e) => { status.lastError = e.message; logger.log("ERROR", "tick:", e); }); }, Math.max(3000, settings.pollMs || 8000));
   if (keepAliveTimer) clearInterval(keepAliveTimer);
   keepAliveTimer = setInterval(() => { keepBookersAlive().catch(() => {}); keepOctoAlive().catch(() => {}); }, 45000);
+  // LIVE-value движок: перезапустить под текущие настройки (ключ/тумблер могли поменяться при сохранении).
+  stopValueEngine(); startValueEngine().catch((e) => logger.log("ERROR", "startValueEngine:", e && e.message));
 }
 
 // ── авто-обновление ───────────────────────────────────────────────────────────
