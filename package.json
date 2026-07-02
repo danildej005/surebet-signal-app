@@ -1,6 +1,6 @@
 {
   "name": "surebet-signal-app",
-  "version": "0.9.3",
+  "version": "0.10.0",
   "description": "Surebet Signal — следит за вилками surebet.com (Pinnacle) и шлёт сигналы в Telegram.",
   "main": "main.cjs",
   "author": "",
