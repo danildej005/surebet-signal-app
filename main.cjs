@@ -1381,10 +1381,12 @@ function maskedSettings() {
     liveMode: !!settings.liveMode,
     vilkaLimitEur: settings.vilkaLimitEur || 0,
     hasToken: !!settings.tgToken,
-    // VALUE-режим (ключ маскируем как токен; остальное — для панели)
+    // VALUE-режим (ключи показываем целиком — его машина)
+    bettingcoKey: settings.bettingcoKey || "",   // ключ Betano-фида bettingco (X-Api-Key)
+    hasBettingcoKey: !!settings.bettingcoKey,
     hasOddsApiKey: !!settings.oddsApiKey,
-    oddsApiKey: settings.oddsApiKey || "",   // по просьбе владельца показываем целиком (его машина)
-    ps3838Auth: settings.ps3838Auth || "",   // login:pass ps3838 — тоже видимо
+    oddsApiKey: settings.oddsApiKey || "",   // УСТАРЕЛ (миграция)
+    ps3838Auth: settings.ps3838Auth || "",   // УСТАРЕЛ (миграция)
     valueMode: !!settings.valueMode,
     valueLive: !!settings.valueLive,
     valueThreshold: settings.valueThreshold != null ? settings.valueThreshold : 0.05,
@@ -1719,7 +1721,8 @@ ipcMain.handle("save-settings", (_e, patch) => {
   if (patch.keyword) clean.keyword = String(patch.keyword).trim().toLowerCase();
   if (typeof patch.liveMode === "boolean") clean.liveMode = patch.liveMode;
   if (patch.vilkaLimitEur !== undefined) clean.vilkaLimitEur = Math.max(0, Number(patch.vilkaLimitEur) || 0);
-  // VALUE-режим (oddspapi). Ключ — как токен: пишем только если непустой (пустой не затирает сохранённый).
+  // VALUE-режим. Ключи — как токен: пишем только если непустой (пустой не затирает сохранённый).
+  if (typeof patch.bettingcoKey === "string" && patch.bettingcoKey.trim()) clean.bettingcoKey = patch.bettingcoKey.trim();
   if (typeof patch.oddsApiKey === "string" && patch.oddsApiKey.trim()) clean.oddsApiKey = patch.oddsApiKey.trim();
   if (typeof patch.valueMode === "boolean") clean.valueMode = patch.valueMode;
   if (typeof patch.valueLive === "boolean") clean.valueLive = patch.valueLive;

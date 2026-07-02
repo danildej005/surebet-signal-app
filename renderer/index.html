@@ -38,17 +38,10 @@
 
   <section class="card" id="valueCard">
     <h2>🎯 Value-режим (прематч)</h2>
-    <p class="muted">Эталон Pinnacle (снимаем маржу) vs Betano. Ставит ОДИНОЧКУ на betano.bg, когда Betano выгоднее честной линии на заданный порог. Включается тумблером ниже.</p>
-    <label>Ключ oddspapi<input id="oddsApiKey" type="text" placeholder="вставь ключ" autocomplete="off" /></label>
-    <label>Источник эталона Pinnacle
-      <select id="valueRefSource">
-        <option value="ps3838">ps3838 (прямой)</option>
-        <option value="oddspapi">oddspapi</option>
-      </select>
-    </label>
-    <label>ps3838 логин:пароль (только чтение; нужно при эталоне ps3838)<input id="ps3838Auth" type="text" placeholder="login:pass" autocomplete="off" /></label>
+    <p class="muted">Эталон Pinnacle (снимаем маржу) vs Betano — оба плеча из одного live-фида (bettingco). Ставит ОДИНОЧКУ на betano.bg, когда Betano выгоднее честной линии на заданный порог. Включается тумблером ниже.</p>
+    <label>Ключ Betano-фида (bettingco, X-Api-Key)<input id="bettingcoKey" type="text" placeholder="вставь ключ" autocomplete="off" /></label>
     <div class="subbox">
-      <div class="muted">Включи спорт галочкой — бот сканирует ВСЕ его лиги автоматически и сам добавляет новые. Ниже видны все лиги (включены); сними галочку, чтобы исключить лигу. Нужен сохранённый ключ oddspapi.</div>
+      <div class="muted">Включи спорт галочкой — бот сканирует ВСЕ его лиги автоматически и сам добавляет новые. Ниже видны все лиги (включены); сними галочку, чтобы исключить лигу. Нужен сохранённый ключ Betano-фида.</div>
       <div id="valueSports"></div>
     </div>
     <div class="subbox">

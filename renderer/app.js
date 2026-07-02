@@ -13,10 +13,9 @@ function renderStatus(s) {
     if ($("tgToken")) $("tgToken").placeholder = s.settings.hasToken ? "токен задан — оставь пустым, чтобы не менять" : "вставь токен бота";
   }
   // Value-режим: заполняем поля ОДИН раз при загрузке (секреты — только placeholder).
-  if (!valueInit && s.settings && $("valueRefSource")) {
+  if (!valueInit && s.settings && $("bettingcoKey")) {
     valueInit = true;
     const v = s.settings;
-    $("valueRefSource").value = v.valueRefSource || "ps3838";
     $("valueThreshold").value = Math.round((v.valueThreshold != null ? v.valueThreshold : 0.05) * 1000) / 10; // доля → %
     $("valueOddsMin").value = v.valueOddsMin || "";
     $("valueOddsMax").value = v.valueOddsMax || "";
@@ -24,8 +23,7 @@ function renderStatus(s) {
     $("valueMaxPerDay").value = v.valueMaxPerDay != null ? v.valueMaxPerDay : 20;
     $("valueMode").checked = !!v.valueMode;
     $("valueLive").checked = !!v.valueLive;
-    $("oddsApiKey").value = v.oddsApiKey || "";   // показываем сохранённый ключ целиком (по просьбе)
-    $("ps3838Auth").value = v.ps3838Auth || "";   // и ps3838 login:pass
+    $("bettingcoKey").value = v.bettingcoKey || "";   // ключ Betano-фида (bettingco), показываем целиком (его машина)
     valueSportsState = (v.valueSports && v.valueSports.length) ? v.valueSports.map((x) => ({ ...x })) : [];
     valueMarketsState = Array.isArray(v.valueMarkets) ? v.valueMarkets.slice() : [];
     renderValueSports();
@@ -153,7 +151,6 @@ function renderValueMarkets() {
 
 function saveValue() {
   const patch = {
-    valueRefSource: $("valueRefSource").value,
     valueThreshold: (Number($("valueThreshold").value) || 5) / 100,
     valueStake: Number($("valueStake").value) || 0,
     valueMaxPerDay: Number($("valueMaxPerDay").value) || 0,
@@ -164,9 +161,8 @@ function saveValue() {
     valueSports: valueSportsState.map((s) => ({ key: s.key, name: s.name, oa: s.oa, ps: s.ps, on: !!s.on, exclude: Array.isArray(s.exclude) ? s.exclude : [] })),
     valueMarkets: valueMarketsState.slice(),
   };
-  const k = $("oddsApiKey").value.trim(); if (k) patch.oddsApiKey = k;
-  const a = $("ps3838Auth").value.trim(); if (a) patch.ps3838Auth = a;
-  return window.api.saveSettings(patch); // поля НЕ очищаем — ключ и ps3838 остаются видны
+  const k = $("bettingcoKey").value.trim(); if (k) patch.bettingcoKey = k;
+  return window.api.saveSettings(patch); // поле НЕ очищаем — ключ остаётся виден
 }
 if ($("valueSave")) $("valueSave").onclick = async () => {
   try { await saveValue(); $("valueResult").textContent = "✅ сохранено"; }
