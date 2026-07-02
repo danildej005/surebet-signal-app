@@ -94,6 +94,20 @@ test("sportName: sportType → название (для статистики)", 
   assert.equal(bc.sportName(999), "sport#999"); // неизвестный → не падает
 });
 
+test("scanValue: сторож рассинхрона по счёту — при разных счётах value не считается", () => {
+  const game = (book, t1, t2, score) => ({ [`/${book}/T/L/${t1}/${t2}`]: { textId: `/${book}/T/L/${t1}/${t2}`, team1NameEn: t1, team2NameEn: t2, currentScore: score, sportType: 3, leagueName: "L", link: "" } });
+  const mk = (book, t1, t2) => ({
+    [`${book}1`]: { gameTextId: `/${book}/T/L/${t1}/${t2}`, surebetTextId: "/Main/Main", meta: book === "Betano" ? "Winner | " + t1 : "1|0|MONEYLINE|TEAM1||0|3", marketValue: book === "Betano" ? 2.2 : 2.0, marketParameter: 0 },
+    [`${book}2`]: { gameTextId: `/${book}/T/L/${t1}/${t2}`, surebetTextId: "/Main/Main", meta: book === "Betano" ? "Winner | " + t2 : "1|0|MONEYLINE|TEAM2||0|3", marketValue: book === "Betano" ? 1.75 : 2.0, marketParameter: 0 },
+  });
+  const B = (score) => ({ gamesOriginModel: { model: game("Betano", "A", "B", score) }, marketsOriginModel: { model: mk("Betano", "A", "B") } });
+  const P = (score) => ({ gamesOriginModel: { model: game("Pinnacle", "A", "B", score) }, marketsOriginModel: { model: mk("Pinnacle", "A", "B") } });
+  // счёт совпадает → value есть (+10%)
+  assert.equal(bc.scanValue(B("6-1, 1-0|CurrentGame:2"), P("6-1, 1-0|CurrentGame:5")).length, 1); // хвост CurrentGame игнор
+  // счёт разный (плечо протухло) → скип, 0 сигналов
+  assert.equal(bc.scanValue(B("6-1, 1-0"), P("6-1, 0-0")).length, 0);
+});
+
 // ── Снимки (модель сессии): накат дельт + сборка состояния + разбор ответа опроса ──
 
 test("applySnapshot: рынки added/updated/removed + возврат writeTime", () => {
