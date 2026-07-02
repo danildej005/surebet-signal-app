@@ -1221,15 +1221,17 @@ async function valueEngineTick() {
   try {
     const st = await valueEngine.poll();
     if (!st.ok) { sendValuePulse({ note: st.reinit ? "переинициализация плеча…" : (st.rate ? "rate-limit…" : "") }); return; }
-    const sigs = valueEngine.scan({ threshold: Number(settings.valueThreshold) || 0.03, maxPlausible: 0.25 });
+    const sigs = valueEngine.scan({ threshold: Number(settings.valueThreshold) || 0.03, maxPlausible: 0.25,
+      marginMax: Number(settings.valueMarginMax) || 0,   // 0 = фильтр маржи ВЫКЛ (калибровка: видим всё); включим после
+      oddsMin: Number(settings.valueOddsMin) || 0, oddsMax: Number(settings.valueOddsMax) || 0 });
     const now = Date.now();
     for (const s of sigs) {
       const k = s.t1 + "~" + s.t2 + "|" + s.market + "|" + s.side; // событие+рынок+сторона = уникальный валуй
       const e = sessionSignals.get(k);
-      if (e) { e.last = now; e.count++; e.maxValue = Math.max(e.maxValue, s.value); e.betanoOdds = s.betanoOdds; }
+      if (e) { e.last = now; e.count++; e.maxValue = Math.max(e.maxValue, s.value); e.betanoOdds = s.betanoOdds; e.maxArb = Math.max(e.maxArb, s.arbPct); }
       else {
-        sessionSignals.set(k, { sport: s.sport, sportType: s.sportType, t1: s.t1, t2: s.t2, market: s.market, side: s.side, maxValue: s.value, first: now, last: now, count: 1, placed: 0, betanoOdds: s.betanoOdds });
-        logger.log("INFO", "[value] 🎯 +" + (s.value * 100).toFixed(1) + "% | " + s.sport + " | " + s.t1 + " vs " + s.t2 + " | " + s.market + " " + s.side + " | Bet " + s.betanoOdds + " vs fair " + s.fair.toFixed(3) + " | " + s.league);
+        sessionSignals.set(k, { sport: s.sport, sportType: s.sportType, t1: s.t1, t2: s.t2, market: s.market, side: s.side, maxValue: s.value, first: now, last: now, count: 1, placed: 0, betanoOdds: s.betanoOdds, arbPct: s.arbPct, maxArb: s.arbPct, margin: s.margin });
+        logger.log("INFO", "[value] 🎯 +" + (s.value * 100).toFixed(1) + "% | вилка " + (s.arbPct >= 0 ? "+" : "") + (s.arbPct * 100).toFixed(1) + "% | маржа " + (s.margin * 100).toFixed(1) + "% | " + s.sport + " | " + s.t1 + " vs " + s.t2 + " | " + s.market + " " + s.side + " | Bet " + s.betanoOdds + " vs fair " + s.fair.toFixed(3) + " | " + s.league);
       }
     }
     // сессионная сводка для панели (детект/проставлено/средние) — считаем по всей сессии
@@ -1251,10 +1253,10 @@ function flushSessionStats() {
   const dir = join((logger.dir && logger.dir()) || app.getPath("userData"), "value-sessions");
   try { fsx.mkdirSync(dir, { recursive: true }); } catch { /* ignore */ }
   const start = sessionStart || Date.now(), end = Date.now(), arr = [...sessionSignals.values()], n = arr.length;
-  const buckets = { "3–5%": 0, "5–10%": 0, ">10%": 0 }; let vSum = 0, lifeSum = 0, placed = 0; const bySport = new Map();
+  const buckets = { "3–5%": 0, "5–10%": 0, ">10%": 0 }; let vSum = 0, lifeSum = 0, placed = 0, arbN = 0; const bySport = new Map();
   for (const e of arr) {
     const v = e.maxValue * 100; if (v >= 10) buckets[">10%"]++; else if (v >= 5) buckets["5–10%"]++; else buckets["3–5%"]++;
-    vSum += e.maxValue; lifeSum += sigLife(e); if (e.placed) placed++;
+    vSum += e.maxValue; lifeSum += sigLife(e); if (e.placed) placed++; if ((e.maxArb || 0) > 0) arbN++; // хоть раз доходил до вилки
     const bs = bySport.get(e.sport) || { n: 0, v: 0, l: 0 }; bs.n++; bs.v += e.maxValue; bs.l += sigLife(e); bySport.set(e.sport, bs);
   }
   const iso = (t) => new Date(t).toISOString().replace("T", " ").slice(0, 19);
@@ -1262,14 +1264,19 @@ function flushSessionStats() {
   const L = ["СЕССИЯ LIVE-VALUE (детект без ставок)",
     "Старт:  " + iso(start), "Конец:  " + iso(end), "Длительность: " + ((end - start) / 60000).toFixed(1) + " мин", "",
     "Задетектировано уникальных валуёв: " + n, "Проставлено: " + placed,
+    "Доходили до ВИЛКИ (arb>0): " + arbN + " из " + n + " (" + (n ? (arbN / n * 100).toFixed(0) : "0") + "%)",
     "Распределение value%:  3–5%: " + buckets["3–5%"] + " | 5–10%: " + buckets["5–10%"] + " | >10%: " + buckets[">10%"],
     "Средний value%: " + (n ? (vSum / n * 100).toFixed(1) : "0") + "%",
     "Среднее время жизни валуя: " + (n ? (lifeSum / n).toFixed(1) : "0") + " с", "", "По спортам:"];
   for (const [sp, bs] of [...bySport.entries()].sort((a, b) => b[1].n - a[1].n))
     L.push("  " + pad(sp, 16) + " " + bs.n + " (ср " + (bs.v / bs.n * 100).toFixed(1) + "%, ср жизнь " + Math.round(bs.l / bs.n) + "с)");
-  L.push("", "СИГНАЛЫ (спорт | событие | рынок сторона | макс% | жил,с | замечен× | проставлен):");
-  for (const e of arr.sort((a, b) => b.maxValue - a.maxValue))
-    L.push("  " + pad(e.sport, 14) + " | " + e.t1 + " vs " + e.t2 + " | " + e.market + " " + e.side + " | +" + (e.maxValue * 100).toFixed(1) + "% | " + sigLife(e) + "с | " + e.count + "× | " + (e.placed ? "да(" + e.placed + ")" : "нет"));
+  // вилка (arbPct): вход = на момент появления, макс = лучшая за жизнь. >0 = реальная вилка %, <0 = ниже вилки. Ось калибровки.
+  const arbS = (x) => (x >= 0 ? "+" : "") + (x * 100).toFixed(1) + "%";
+  L.push("", "СИГНАЛЫ (спорт | событие | рынок сторона | value% | вилка(вход/макс) | маржаPin | жил,с | ×| поставл.):");
+  for (const e of arr.sort((a, b) => (b.maxArb || -9) - (a.maxArb || -9))) // сортировка по близости к вилке
+    L.push("  " + pad(e.sport, 12) + " | " + e.t1 + " vs " + e.t2 + " | " + e.market + " " + e.side +
+      " | +" + (e.maxValue * 100).toFixed(1) + "% | вилка " + arbS(e.arbPct || 0) + "/" + arbS(e.maxArb || 0) +
+      " | маржа " + ((e.margin || 0) * 100).toFixed(1) + "% | " + sigLife(e) + "с | " + e.count + "× | " + (e.placed ? "да(" + e.placed + ")" : "нет"));
   const file = join(dir, "value-session-" + iso(start).replace(/[: ]/g, "-") + ".txt");
   try { fsx.writeFileSync(file, L.join("\n") + "\n", "utf8"); logger.log("INFO", "[value] сессия сохранена: " + file + " (" + n + " валуёв, проставлено " + placed + ")"); }
   catch (e) { logger.log("WARN", "[value] сессия не сохранена: " + e.message); }
@@ -1833,6 +1840,7 @@ ipcMain.handle("save-settings", (_e, patch) => {
   if (Array.isArray(patch.valueMarkets)) clean.valueMarkets = patch.valueMarkets.map((m) => String(m));
   if (patch.valueOddsMin !== undefined) clean.valueOddsMin = Math.max(0, Number(patch.valueOddsMin) || 0);
   if (patch.valueOddsMax !== undefined) clean.valueOddsMax = Math.max(0, Number(patch.valueOddsMax) || 0);
+  if (patch.valueMarginMax !== undefined) clean.valueMarginMax = Math.max(0, Number(patch.valueMarginMax) || 0);
   if (patch.valueThreshold !== undefined) clean.valueThreshold = Math.max(0, Number(patch.valueThreshold) || 0.05);
   if (patch.valueStake !== undefined) clean.valueStake = Math.max(0, Number(patch.valueStake) || 0);
   if (patch.valueMaxPerDay !== undefined) clean.valueMaxPerDay = Math.max(0, Number(patch.valueMaxPerDay) || 0);

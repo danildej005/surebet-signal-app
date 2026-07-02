@@ -94,6 +94,26 @@ test("sportName: sportType → название (для статистики)", 
   assert.equal(bc.sportName(999), "sport#999"); // неизвестный → не падает
 });
 
+test("valueForEvent: фильтр маржи Pinnacle режет широкий (неострый) эталон", () => {
+  const B = [
+    { surebetTextId: "/Main/Main", meta: "Winner | A", marketValue: 2.20 },
+    { surebetTextId: "/Main/Main", meta: "Winner | B", marketValue: 1.75 },
+  ];
+  // Pinnacle с ШИРОКОЙ маржой: 1/1.9+1/1.9−1 = 5.3%… сделаем явно широкую 1.7/1.7 → маржа 17.6%
+  const Pwide = [
+    { surebetTextId: "/Main/Main", meta: "1|0|MONEYLINE|TEAM1||0|3", marketValue: 1.7, marketParameter: 0 },
+    { surebetTextId: "/Main/Main", meta: "1|0|MONEYLINE|TEAM2||0|3", marketValue: 1.7, marketParameter: 0 },
+  ];
+  // при marginMax 6% широкий эталон (17.6%) отсекается → 0 сигналов
+  assert.equal(bc.valueForEvent(B, Pwide, "A", "B", { threshold: 0.02, marginMax: 0.06 }).length, 0);
+  // с узкой маржой (2.0/2.0 = 0%) сигнал проходит
+  const Ptight = [
+    { surebetTextId: "/Main/Main", meta: "1|0|MONEYLINE|TEAM1||0|3", marketValue: 2.0, marketParameter: 0 },
+    { surebetTextId: "/Main/Main", meta: "1|0|MONEYLINE|TEAM2||0|3", marketValue: 2.0, marketParameter: 0 },
+  ];
+  assert.ok(bc.valueForEvent(B, Ptight, "A", "B", { threshold: 0.02, marginMax: 0.06 }).length >= 1);
+});
+
 test("scanValue: сторож рассинхрона по счёту — при разных счётах value не считается", () => {
   const game = (book, t1, t2, score) => ({ [`/${book}/T/L/${t1}/${t2}`]: { textId: `/${book}/T/L/${t1}/${t2}`, team1NameEn: t1, team2NameEn: t2, currentScore: score, sportType: 3, leagueName: "L", link: "" } });
   const mk = (book, t1, t2) => ({
