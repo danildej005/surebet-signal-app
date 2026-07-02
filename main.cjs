@@ -1177,7 +1177,10 @@ let valuePulseState = { on: false }; // статус value для шапки п�
 // ── Движок LIVE-value на фиде bettingco (Betano+Pinnacle синхронно, снимки ~1с). ТОЛЬКО ДЕТЕКЦИЯ ──
 // Простановка через Octo — отдельная фаза; здесь движок держит сессии, сканит и толкает сигналы в панель.
 let valueEngine = null, valueEngineTimer = null, valueEngineBusy = false, valueEngineStarting = false;
-const liveSignals = new Map(); // ключ сигнала → {first,last,count,maxValue,desc,value,...} (для дедупа + живучести)
+let sessionStart = 0;
+// ВСЯ сессия (НЕ чистим до её закрытия): key → {sport,sportType,t1,t2,market,side,maxValue,first,last,count,placed,betanoOdds}.
+// Время жизни валуя = last−first (от появления до последнего раза, что видели ≥ порога). placed — для будущей простановки (сейчас 0).
+const sessionSignals = new Map();
 
 async function startValueEngine() {
   // Условие работы: включён value + задан ключ Betano-фида. Иначе — остановить.
@@ -1189,6 +1192,7 @@ async function startValueEngine() {
     const eng = new ValueLiveEngine(settings.bettingcoKey, {});
     await eng.init();
     valueEngine = eng;
+    sessionStart = Date.now(); sessionSignals.clear(); // новая сессия статистики
     const c = eng.counts();
     logger.log("INFO", "[value] движок bettingco поднят: Betano игр " + c.games + " | Pinnacle игр " + c.pinGames);
     sendValuePulse({ scanning: false, note: "", matched: null });
@@ -1201,38 +1205,75 @@ async function startValueEngine() {
 
 function stopValueEngine() {
   if (valueEngineTimer) { clearInterval(valueEngineTimer); valueEngineTimer = null; }
-  valueEngine = null; liveSignals.clear();
+  flushSessionStats();  // одна сессия = один файл: сохраняем при закрытии
+  valueEngine = null; sessionSignals.clear();
 }
 
-// Один цикл движка: опрос обеих книг (снимки) → скан value → дедуп + живучесть → пульс в панель.
+// Будущая простановка вызовет это, чтобы отметить валуй проставленным (сейчас не вызывается → placed=0).
+function markValuePlaced(key) { const e = sessionSignals.get(key); if (e) e.placed = (e.placed || 0) + 1; }
+
+const sigLife = (e) => Math.round((e.last - e.first) / 1000); // время жизни валуя, с
+
+// Один цикл движка: опрос обеих книг (снимки) → скан value → накопление сессионной статы → пульс в панель.
 async function valueEngineTick() {
   if (valueEngineBusy || !valueEngine || botBusy) return;
   valueEngineBusy = true;
   try {
     const st = await valueEngine.poll();
     if (!st.ok) { sendValuePulse({ note: st.reinit ? "переинициализация плеча…" : (st.rate ? "rate-limit…" : "") }); return; }
-    const sigs = valueEngine.scan({
-      threshold: Number(settings.valueThreshold) || 0.03, maxPlausible: 0.25,
-      markets: settings.valueMarkets || [], oddsMin: Number(settings.valueOddsMin) || 0, oddsMax: Number(settings.valueOddsMax) || 0,
-    });
+    const sigs = valueEngine.scan({ threshold: Number(settings.valueThreshold) || 0.03, maxPlausible: 0.25 });
     const now = Date.now();
     for (const s of sigs) {
-      const k = s.t1 + "~" + s.t2 + "|" + s.market + "|" + s.side;
-      const e = liveSignals.get(k);
-      if (e) { e.last = now; e.count++; e.maxValue = Math.max(e.maxValue, s.value); e.value = s.value; e.betanoOdds = s.betanoOdds; }
+      const k = s.t1 + "~" + s.t2 + "|" + s.market + "|" + s.side; // событие+рынок+сторона = уникальный валуй
+      const e = sessionSignals.get(k);
+      if (e) { e.last = now; e.count++; e.maxValue = Math.max(e.maxValue, s.value); e.betanoOdds = s.betanoOdds; }
       else {
-        liveSignals.set(k, { first: now, last: now, count: 1, maxValue: s.value, value: s.value, betanoOdds: s.betanoOdds, desc: s.t1 + " vs " + s.t2 + " · " + s.market + " " + s.side, league: s.league, link: s.link });
-        logger.log("INFO", "[value] 🎯 +" + (s.value * 100).toFixed(1) + "% | " + s.t1 + " vs " + s.t2 + " | " + s.market + " " + s.side + " | Bet " + s.betanoOdds + " vs fair " + s.fair.toFixed(3) + " | " + s.league);
+        sessionSignals.set(k, { sport: s.sport, sportType: s.sportType, t1: s.t1, t2: s.t2, market: s.market, side: s.side, maxValue: s.value, first: now, last: now, count: 1, placed: 0, betanoOdds: s.betanoOdds });
+        logger.log("INFO", "[value] 🎯 +" + (s.value * 100).toFixed(1) + "% | " + s.sport + " | " + s.t1 + " vs " + s.t2 + " | " + s.market + " " + s.side + " | Bet " + s.betanoOdds + " vs fair " + s.fair.toFixed(3) + " | " + s.league);
       }
     }
-    // почистить сигналы, которых не было в этом скане > 20с (пропали с доски)
-    for (const [k, e] of liveSignals) if (now - e.last > 20000) liveSignals.delete(k);
-    const top = sigs[0] || null;
+    // сессионная сводка для панели (детект/проставлено/средние) — считаем по всей сессии
+    let vSum = 0, lifeSum = 0, placed = 0; const arr = [...sessionSignals.values()];
+    for (const e of arr) { vSum += e.maxValue; lifeSum += sigLife(e); if (e.placed) placed++; }
+    const n = arr.length, top = sigs[0] || null;
     sendValuePulse({ on: true, live: !!settings.valueLive, scanning: false, error: "",
       candidates: sigs.length, top: top ? top.value : null, ageMs: Math.round((st.ageB + st.ageP) / 2),
-      lastBet: top ? (top.t1 + " vs " + top.t2 + " · " + top.market + " " + top.side + " +" + (top.value * 100).toFixed(1) + "%") : "" });
+      sessDetected: n, sessPlaced: placed, sessAvg: n ? vSum / n : 0, sessLife: n ? lifeSum / n : 0,
+      lastBet: top ? (top.sport + " · " + top.t1 + " vs " + top.t2 + " · " + top.market + " " + top.side + " +" + (top.value * 100).toFixed(1) + "%") : "" });
   } catch (e) { logger.log("ERROR", "[value] цикл движка:", e && e.message); sendValuePulse({ error: e && e.message }); }
   finally { valueEngineBusy = false; }
+}
+
+// Одна сессия = один текстовый файл (logs/value-sessions/). Пишем при закрытии сессии, если были валуи.
+function flushSessionStats() {
+  if (!sessionSignals.size) return null;
+  const fsx = require("node:fs");
+  const dir = join((logger.dir && logger.dir()) || app.getPath("userData"), "value-sessions");
+  try { fsx.mkdirSync(dir, { recursive: true }); } catch { /* ignore */ }
+  const start = sessionStart || Date.now(), end = Date.now(), arr = [...sessionSignals.values()], n = arr.length;
+  const buckets = { "3–5%": 0, "5–10%": 0, ">10%": 0 }; let vSum = 0, lifeSum = 0, placed = 0; const bySport = new Map();
+  for (const e of arr) {
+    const v = e.maxValue * 100; if (v >= 10) buckets[">10%"]++; else if (v >= 5) buckets["5–10%"]++; else buckets["3–5%"]++;
+    vSum += e.maxValue; lifeSum += sigLife(e); if (e.placed) placed++;
+    const bs = bySport.get(e.sport) || { n: 0, v: 0, l: 0 }; bs.n++; bs.v += e.maxValue; bs.l += sigLife(e); bySport.set(e.sport, bs);
+  }
+  const iso = (t) => new Date(t).toISOString().replace("T", " ").slice(0, 19);
+  const pad = (s, w) => String(s).padEnd(w);
+  const L = ["СЕССИЯ LIVE-VALUE (детект без ставок)",
+    "Старт:  " + iso(start), "Конец:  " + iso(end), "Длительность: " + ((end - start) / 60000).toFixed(1) + " мин", "",
+    "Задетектировано уникальных валуёв: " + n, "Проставлено: " + placed,
+    "Распределение value%:  3–5%: " + buckets["3–5%"] + " | 5–10%: " + buckets["5–10%"] + " | >10%: " + buckets[">10%"],
+    "Средний value%: " + (n ? (vSum / n * 100).toFixed(1) : "0") + "%",
+    "Среднее время жизни валуя: " + (n ? (lifeSum / n).toFixed(1) : "0") + " с", "", "По спортам:"];
+  for (const [sp, bs] of [...bySport.entries()].sort((a, b) => b[1].n - a[1].n))
+    L.push("  " + pad(sp, 16) + " " + bs.n + " (ср " + (bs.v / bs.n * 100).toFixed(1) + "%, ср жизнь " + Math.round(bs.l / bs.n) + "с)");
+  L.push("", "СИГНАЛЫ (спорт | событие | рынок сторона | макс% | жил,с | замечен× | проставлен):");
+  for (const e of arr.sort((a, b) => b.maxValue - a.maxValue))
+    L.push("  " + pad(e.sport, 14) + " | " + e.t1 + " vs " + e.t2 + " | " + e.market + " " + e.side + " | +" + (e.maxValue * 100).toFixed(1) + "% | " + sigLife(e) + "с | " + e.count + "× | " + (e.placed ? "да(" + e.placed + ")" : "нет"));
+  const file = join(dir, "value-session-" + iso(start).replace(/[: ]/g, "-") + ".txt");
+  try { fsx.writeFileSync(file, L.join("\n") + "\n", "utf8"); logger.log("INFO", "[value] сессия сохранена: " + file + " (" + n + " валуёв, проставлено " + placed + ")"); }
+  catch (e) { logger.log("WARN", "[value] сессия не сохранена: " + e.message); }
+  return file;
 }
 
 // Толкнуть статистику value в шапку панели (мердж с предыдущим состоянием).
@@ -2012,5 +2053,5 @@ if (!gotLock) {
   });
 
   app.on("window-all-closed", (e) => { /* живём в трее, не выходим */ });
-  app.on("before-quit", () => { app.isQuitting = true; });
+  app.on("before-quit", () => { app.isQuitting = true; try { flushSessionStats(); } catch { /* ignore */ } });
 }

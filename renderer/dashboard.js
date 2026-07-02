@@ -33,10 +33,13 @@ if (window.api.onValuePulse) window.api.onValuePulse((p) => {
   else if (p.scanning) { color = "#2980b9"; s = "⚙️ сканирую кэфы…"; }
   else {
     color = p.live ? "#1a9e4b" : "#e67e22";
-    s = "value " + (p.live ? "⚡БОЕВОЙ" : "dry-run") + " · кандидатов " + (p.candidates != null ? p.candidates : 0) +
+    s = "value " + (p.live ? "⚡БОЕВОЙ" : "детект") + " · сейчас на доске " + (p.candidates != null ? p.candidates : 0) +
       (p.top != null ? " (топ +" + (p.top * 100).toFixed(1) + "%)" : "") +
-      " · поставлено " + (p.placedToday || 0) + "/" + (p.max || 0) + (p.note ? " · " + p.note : "");
-    if (p.lastBet) s += "\nпоследняя: " + p.lastBet;
+      (p.ageMs != null ? " · возраст плеч " + p.ageMs + "мс" : "") + (p.note ? " · " + p.note : "");
+    // сессионная статистика (накопительно за сессию)
+    s += "\nСЕССИЯ: задетектировано " + (p.sessDetected || 0) + " · проставлено " + (p.sessPlaced || 0) +
+      (p.sessDetected ? " · средний +" + ((p.sessAvg || 0) * 100).toFixed(1) + "% · ср. жизнь " + (p.sessLife || 0).toFixed(0) + "с" : "");
+    if (p.lastBet) s += "\nтоп сейчас: " + p.lastBet;
   }
   el.style.color = color;
   el.style.whiteSpace = "pre-wrap";

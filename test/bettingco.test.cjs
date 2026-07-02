@@ -86,6 +86,14 @@ test("valueForEvent: реальный value проходит, артефакт (
   assert.equal(bc.valueForEvent(B2, P, "A", "B", { threshold: 0.02, maxPlausible: 0.25 }).length, 0);
 });
 
+test("sportName: sportType → название (для статистики)", () => {
+  assert.equal(bc.sportName(3), "Теннис");
+  assert.equal(bc.sportName(9), "Бейсбол");
+  assert.equal(bc.sportName(1), "Футбол");
+  assert.equal(bc.sportName(22), "Кибер-футбол");
+  assert.equal(bc.sportName(999), "sport#999"); // неизвестный → не падает
+});
+
 // ── Снимки (модель сессии): накат дельт + сборка состояния + разбор ответа опроса ──
 
 test("applySnapshot: рынки added/updated/removed + возврат writeTime", () => {
