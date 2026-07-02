@@ -124,6 +124,16 @@ test("applySnapshot: рынки added/updated/removed + возврат writeTime
   assert.ok(!state.markets["/m/del"]);                      // removed
 });
 
+test("applySnapshot: дельта-обновление кэфа (marketModel:null, кэф в value)", () => {
+  const state = { games: {}, markets: { "/m/1": { textId: "/m/1", marketValue: 1.5, gameTextId: "/g/1" } }, touched: {} };
+  bc.applySnapshot(state, {
+    writeTime: "2026-07-02T10:00:05Z",
+    marketsUpdated: [{ textId: "/m/1", value: 2.2, marketModel: null, gameTextId: "/g/1" }],
+  });
+  assert.equal(state.markets["/m/1"].marketValue, 2.2);       // кэф обновился из value (раньше дропался!)
+  assert.equal(state.touched["/g/1"], "2026-07-02T10:00:05Z"); // touched события бампнулся
+});
+
 test("applySnapshot: игры — точечный апдейт счёта, полная замена, удаление", () => {
   const state = { games: { "/g/1": { textId: "/g/1", team1NameEn: "A", team2NameEn: "B", currentScore: "0-0" }, "/g/del": { textId: "/g/del" } }, markets: {} };
   bc.applySnapshot(state, {
