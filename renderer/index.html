@@ -59,6 +59,9 @@
     <label>Лимит ставок в сутки<input id="valueMaxPerDay" type="number" min="0" step="1" placeholder="20" /></label>
     <label class="liverow"><input type="checkbox" id="valueMode" /> <b>Value-режим ВКЛ</b> — сканировать и ставить</label>
     <label class="liverow"><input type="checkbox" id="valueLive" /> <b>⚡ Боевой</b> — реальные ставки (выкл = dry-run)</label>
+    <label class="liverow"><input type="checkbox" id="valuePlace" /> <b>🅱️ Простановка</b> — ставить сигналы на Betano через Octo (нужен octoMode; выкл = только детект)</label>
+    <label class="liverow" style="padding-left:22px;"><input type="checkbox" id="valuePlaceRequireArb" /> только дошедшие до <b>вилки</b> (arb&gt;0)</label>
+    <label class="liverow" style="padding-left:22px;"><input type="checkbox" id="valuePlaceMlOnly" /> только <b>победа (ML)</b> — самый надёжный выбор для старта</label>
     <div class="row" style="margin-top:8px;"><button id="valueSave">Сохранить</button></div>
     <div class="muted" id="valueResult"></div>
   </section>

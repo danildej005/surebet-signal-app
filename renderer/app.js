@@ -23,6 +23,9 @@ function renderStatus(s) {
     $("valueMaxPerDay").value = v.valueMaxPerDay != null ? v.valueMaxPerDay : 20;
     $("valueMode").checked = !!v.valueMode;
     $("valueLive").checked = !!v.valueLive;
+    if ($("valuePlace")) $("valuePlace").checked = !!v.valuePlace;
+    if ($("valuePlaceRequireArb")) $("valuePlaceRequireArb").checked = !!v.valuePlaceRequireArb;
+    if ($("valuePlaceMlOnly")) $("valuePlaceMlOnly").checked = Array.isArray(v.valuePlaceKinds) && v.valuePlaceKinds.length === 1 && v.valuePlaceKinds[0] === "ML";
     $("bettingcoKey").value = v.bettingcoKey || "";   // ключ Betano-фида (bettingco), показываем целиком (его машина)
     valueSportsState = (v.valueSports && v.valueSports.length) ? v.valueSports.map((x) => ({ ...x })) : [];
     valueMarketsState = Array.isArray(v.valueMarkets) ? v.valueMarkets.slice() : [];
@@ -158,6 +161,9 @@ function saveValue() {
     valueOddsMax: Number($("valueOddsMax").value) || 0,
     valueMode: $("valueMode").checked,
     valueLive: $("valueLive").checked,
+    valuePlace: $("valuePlace") ? $("valuePlace").checked : false,
+    valuePlaceRequireArb: $("valuePlaceRequireArb") ? $("valuePlaceRequireArb").checked : false,
+    valuePlaceKinds: ($("valuePlaceMlOnly") && $("valuePlaceMlOnly").checked) ? ["ML"] : [],
     valueSports: valueSportsState.map((s) => ({ key: s.key, name: s.name, oa: s.oa, ps: s.ps, on: !!s.on, exclude: Array.isArray(s.exclude) ? s.exclude : [] })),
     valueMarkets: valueMarketsState.slice(),
   };
@@ -171,6 +177,9 @@ if ($("valueSave")) $("valueSave").onclick = async () => {
 // тумблеры value сохраняем сразу (движок подхватит на следующем тике)
 if ($("valueMode")) $("valueMode").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valueMode").checked ? "🎯 value-режим ВКЛ" : "value-режим выкл"; }).catch((e) => { $("valueResult").textContent = "⚠️ " + e.message; });
 if ($("valueLive")) $("valueLive").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valueLive").checked ? "⚡ боевой ВКЛ" : "dry-run"; }).catch(() => {});
+if ($("valuePlace")) $("valuePlace").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valuePlace").checked ? "🅱️ простановка ВКЛ" : "простановка выкл"; }).catch(() => {});
+if ($("valuePlaceRequireArb")) $("valuePlaceRequireArb").onchange = () => saveValue().catch(() => {});
+if ($("valuePlaceMlOnly")) $("valuePlaceMlOnly").onchange = () => saveValue().catch(() => {});
 
 // ── конторы (антидетект-профили) ──────────────────────────────────────────────
 let bookersCache = [];

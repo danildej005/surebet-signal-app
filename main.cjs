@@ -20,6 +20,7 @@ const { scanAll } = require("./lib/valuescanner.cjs"); // value-режим: му
 const oddsapi = require("./lib/oddspapi.cjs"); // клиент oddspapi (для списка лиг в панели)
 const octo = require("./lib/octo.cjs"); // Octo Browser (антидетект по API) — простановка на Betano вместо Electron-окна
 const { ValueLiveEngine } = require("./lib/valuelive.cjs"); // движок LIVE-value на фиде bettingco (Betano+Pinnacle синхронно)
+const valueplace = require("./lib/valueplace.cjs"); // ставочная часть: выбор ЧТО ставить + синтез Betano-desc (флаг valuePlace)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -1177,6 +1178,8 @@ let valuePulseState = { on: false }; // статус value для шапки п�
 // ── Движок LIVE-value на фиде bettingco (Betano+Pinnacle синхронно, снимки ~1с). ТОЛЬКО ДЕТЕКЦИЯ ──
 // Простановка через Octo — отдельная фаза; здесь движок держит сессии, сканит и толкает сигналы в панель.
 let valueEngine = null, valueEngineTimer = null, valueEngineBusy = false, valueEngineStarting = false, valueAutosaveTimer = null;
+let valuePlaceBusy = false, valuePlaceCount = 0, valuePlaceDay = ""; // состояние ставочной части (свой busy/лимит/день)
+const valuePlacedKeys = new Set(); // исходы, уже пробованные на ставку в этой сессии (дедуп, без спама Octo)
 let sessionStart = 0;
 // ВСЯ сессия (НЕ чистим до её закрытия): key → {sport,sportType,t1,t2,market,side,maxValue,first,last,count,placed,betanoOdds}.
 // Время жизни валуя = last−first (от появления до последнего раза, что видели ≥ порога). placed — для будущей простановки (сейчас 0).
@@ -1195,7 +1198,7 @@ async function startValueEngine() {
     const eng = new ValueLiveEngine(settings.bettingcoKey, {});
     await eng.init();
     valueEngine = eng;
-    sessionStart = Date.now(); sessionSignals.clear(); sessionEvents.clear(); // новая сессия статистики
+    sessionStart = Date.now(); sessionSignals.clear(); sessionEvents.clear(); valuePlacedKeys.clear(); valuePlaceCount = 0; // новая сессия
     const c = eng.counts();
     logger.log("INFO", "[value] движок bettingco поднят: Betano игр " + c.games + " | Pinnacle игр " + c.pinGames);
     sendValuePulse({ scanning: false, note: "", matched: null });
@@ -1264,8 +1267,39 @@ async function valueEngineTick() {
       candidates: sigs.length, top: top ? top.value : null, ageMs: Math.round((st.ageB + st.ageP) / 2),
       sessDetected: n, sessPlaced: placed, sessAvg: n ? vSum / n : 0, sessLife: n ? lifeSum / n : 0,
       lastBet: top ? (top.sport + " · " + top.t1 + " vs " + top.t2 + " · " + top.market + " " + top.side + " +" + (top.value * 100).toFixed(1) + "%") : "" });
+    // Ставочная часть на этих же сигналах (флаг valuePlace, по умолчанию ВЫКЛ; реальный клик только при valueLive).
+    if (settings.valuePlace && settings.octoMode) tryPlaceFromValueSignals(sigs).catch((e) => logger.log("ERROR", "[value] простановка:", e && e.message));
   } catch (e) { logger.log("ERROR", "[value] цикл движка:", e && e.message); sendValuePulse({ error: e && e.message }); }
   finally { valueEngineBusy = false; }
+}
+
+// Одна попытка простановки из value-сигналов (флаг valuePlace). Переиспуёт runValueCycle (Octo/Betano-выбор).
+// Свой busy-гард, суточный лимит, дедуп исходов; valueLive=false → dry-run (выбор исхода без клика «поставить»).
+async function tryPlaceFromValueSignals(sigs) {
+  if (valuePlaceBusy || botBusy || valueBusy) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if (valuePlaceDay !== today) { valuePlaceDay = today; valuePlaceCount = 0; }
+  const cfg = {
+    minValue: Number(settings.valueThreshold) || 0.02, stake: Number(settings.valueStake) || 0,
+    oddsMin: Number(settings.valueOddsMin) || 0, oddsMax: Number(settings.valueOddsMax) || 0,
+    maxPerDay: Number(settings.valueMaxPerDay) || 0, requireArb: !!settings.valuePlaceRequireArb,
+    kinds: (settings.valuePlaceKinds && settings.valuePlaceKinds.length) ? settings.valuePlaceKinds : null,
+  };
+  const pick = valueplace.choosePlacement(sigs, cfg, { placedToday: valuePlaceCount, maxPerDay: cfg.maxPerDay, placedKeys: valuePlacedKeys });
+  if (pick.skip || !pick.candidate) return;
+  const c = pick.candidate;
+  if (!c.stake) { logger.log("WARN", "[value] простановка: сумма ставки не задана (valueStake=0) — пропуск"); return; }
+  valuePlaceBusy = true;
+  const live = !!settings.valueLive;
+  logger.log("INFO", "[value] " + (live ? "СТАВЛЮ" : "DRY-RUN") + " " + c.t1 + " vs " + c.t2 + " | " + c.market + " " + c.side + " | " + c.desc + " @" + c.expectedOdds + " × " + c.stake + " | +" + (c.value * 100).toFixed(1) + "%");
+  try {
+    const res = await runValueCycle(c, live);
+    valuePlacedKeys.add(c.key); // пробовали — не долбим этот исход каждый тик (успех/неудача не важно)
+    if (res && res.placed) { valuePlaceCount++; markValuePlaced(c.key); logger.log("INFO", "[value] ✅ ПОСТАВЛЕНО: " + (res.selected || c.desc) + " @" + (res.selectedOdds || c.expectedOdds)); }
+    else if (res && res.selected) logger.log("INFO", "[value] dry-run: выбрал «" + res.selected + "» @" + (res.selectedOdds || "?") + (res.error ? " | " + res.error : ""));
+    else logger.log("WARN", "[value] простановка не прошла: " + ((res && res.error) || "исход не выбран"));
+  } catch (e) { logger.log("ERROR", "[value] простановка:", e && e.message); }
+  finally { valuePlaceBusy = false; }
 }
 
 // Одна сессия = один текстовый файл (logs/value-sessions/). Пишем при закрытии сессии, если были валуи.
@@ -1359,7 +1393,7 @@ function formatValueTelegram(c, res, live) {
 async function runValueCycle(c, live) {
   const booker = findBooker("betano");
   if (!booker) return { ok: false, error: "контора betano не настроена" };
-  pendingBet.set("betano", { outcomeId: c.outcomeId, expectedOdds: c.expectedOdds, desc: c.desc, descFull: c.subject || c.desc, subject: c.subject });
+  pendingBet.set("betano", { outcomeId: c.outcomeId, expectedOdds: c.expectedOdds, desc: c.desc, descFull: c.descFull || c.subject || c.desc, subject: c.subject });
   // Octo-режим: антидетект/прокси/логин — внутри Octo-профиля, открываем betano.bg в Octo-странице.
   // Иначе — наш Electron-антидетект (запасной путь). Адаптер кладётся в octoWins → placeBet берёт его через bookerWin.
   if (settings.octoMode) {
@@ -1890,6 +1924,9 @@ ipcMain.handle("save-settings", (_e, patch) => {
   if (typeof patch.oddsApiKey === "string" && patch.oddsApiKey.trim()) clean.oddsApiKey = patch.oddsApiKey.trim();
   if (typeof patch.valueMode === "boolean") clean.valueMode = patch.valueMode;
   if (typeof patch.valueLive === "boolean") clean.valueLive = patch.valueLive;
+  if (typeof patch.valuePlace === "boolean") clean.valuePlace = patch.valuePlace;
+  if (typeof patch.valuePlaceRequireArb === "boolean") clean.valuePlaceRequireArb = patch.valuePlaceRequireArb;
+  if (Array.isArray(patch.valuePlaceKinds)) clean.valuePlaceKinds = patch.valuePlaceKinds.map(String);
   if (Array.isArray(patch.valueSports)) clean.valueSports = patch.valueSports.map((s) => ({ key: String(s.key || ""), name: String(s.name || ""), oa: String(s.oa || ""), ps: String(s.ps || ""), on: !!s.on, exclude: Array.isArray(s.exclude) ? s.exclude.map(String) : [] }));
   if (Array.isArray(patch.valueMarkets)) clean.valueMarkets = patch.valueMarkets.map((m) => String(m));
   if (patch.valueOddsMin !== undefined) clean.valueOddsMin = Math.max(0, Number(patch.valueOddsMin) || 0);
