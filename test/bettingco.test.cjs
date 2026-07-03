@@ -128,6 +128,64 @@ test("scanValue: сторож рассинхрона по счёту — при 
   assert.equal(bc.scanValue(B("6-1, 1-0"), P("6-1, 0-0")).length, 0);
 });
 
+// ── SPREAD / фора: ЗНАКОВАЯ линия со стороны A (team1). Форма данных из живого фида (захват 2026-07-03) ──
+
+test("pinnacleOutcomes: SPREAD — обе линии ±L как разные ключи, знак со стороны A", () => {
+  // Реальный расклад: Pinnacle отдаёт TEAM1@±1.5 и TEAM2@∓1.5 — ДВА рынка (линия +1.5 и линия −1.5 у team1).
+  const mk = [
+    { surebetTextId: "/Main/Main", meta: "1|0|SPREAD|TEAM1||1.5|8", marketValue: 1.198, marketParameter: 1.5 },
+    { surebetTextId: "/Main/Main", meta: "1|0|SPREAD|TEAM2||-1.5|8", marketValue: 4.6, marketParameter: -1.5 },
+    { surebetTextId: "/Main/Main", meta: "1|0|SPREAD|TEAM1||-1.5|8", marketValue: 2.15, marketParameter: -1.5 },
+    { surebetTextId: "/Main/Main", meta: "1|0|SPREAD|TEAM2||1.5|8", marketValue: 1.719, marketParameter: 1.5 },
+  ];
+  const o = bc.pinnacleOutcomes(mk);
+  assert.deepEqual(o["/Main/Main|SPREAD|1.5"], { A: 1.198, B: 4.6 });   // линия +1.5 у team1 (team2 −1.5)
+  assert.deepEqual(o["/Main/Main|SPREAD|-1.5"], { A: 2.15, B: 1.719 }); // линия −1.5 у team1 (team2 +1.5)
+});
+
+test("pinnacleOutcomes: SPREAD при flip (обратный порядок команд) — линия всё равно со стороны A", () => {
+  const mk = [
+    { surebetTextId: "/Main/Main", meta: "1|0|SPREAD|TEAM1||-1.5|8", marketValue: 2.15, marketParameter: -1.5 },
+    { surebetTextId: "/Main/Main", meta: "1|0|SPREAD|TEAM2||1.5|8", marketValue: 1.719, marketParameter: 1.5 },
+  ];
+  // flip=true: Pinnacle-TEAM1 = Betano-team2 (B). Линия со стороны A(=Betano-team1) = −(−1.5) = +1.5.
+  const o = bc.pinnacleOutcomes(mk, true);
+  assert.deepEqual(o["/Main/Main|SPREAD|1.5"], { A: 1.719, B: 2.15 });
+});
+
+test("betanoOutcomes: SPREAD — знаковая линия со стороны team1, сеты и геймы разведены по st", () => {
+  const mk = [
+    { surebetTextId: "/Main/Main", meta: "Match Handicap (Set) | Gustavo Heide -1.5", marketValue: 2.18, marketParameter: -1.5 },
+    { surebetTextId: "/Main/Main", meta: "Match Handicap (Set) | Enrico Dalla Valle 1.5", marketValue: 1.6, marketParameter: 1.5 },
+    { surebetTextId: "/Main/Main/Game", meta: "Handicap Games | Enrico Dalla Valle 2.5", marketValue: 1.98, marketParameter: 2.5 },
+    { surebetTextId: "/Main/Main/Game", meta: "Handicap Games | Gustavo Heide -2.5", marketValue: 1.72, marketParameter: -2.5 },
+  ];
+  const o = bc.betanoOutcomes(mk, "Gustavo Heide", "Enrico Dalla Valle");
+  assert.deepEqual(o["/Main/Main|SPREAD|-1.5"], { A: 2.18, B: 1.6 });       // сеты: team1 −1.5
+  assert.deepEqual(o["/Main/Main/Game|SPREAD|-2.5"], { A: 1.72, B: 1.98 }); // геймы: team1 −2.5 (не путается с сетами)
+});
+
+test("valueForEvent: SPREAD матчится по ЗНАКОВОЙ линии; лишняя линия Pinnacle без пары не считается", () => {
+  const B = [
+    { surebetTextId: "/Main/Main", meta: "Match Handicap (Set) | Heide -1.5", marketValue: 2.2, marketParameter: -1.5 },
+    { surebetTextId: "/Main/Main", meta: "Match Handicap (Set) | Valle 1.5", marketValue: 1.75, marketParameter: 1.5 },
+  ];
+  const P = [
+    // линия −1.5 (fair 0.5/0.5) — совпадает с Betano
+    { surebetTextId: "/Main/Main", meta: "1|0|SPREAD|TEAM1||-1.5|8", marketValue: 2.0, marketParameter: -1.5 },
+    { surebetTextId: "/Main/Main", meta: "1|0|SPREAD|TEAM2||1.5|8", marketValue: 2.0, marketParameter: 1.5 },
+    // линия +1.5 у team1 — у Betano такой линии НЕТ → фантомная пара не считается (раньше модуль склеил бы с −1.5)
+    { surebetTextId: "/Main/Main", meta: "1|0|SPREAD|TEAM1||1.5|8", marketValue: 1.2, marketParameter: 1.5 },
+    { surebetTextId: "/Main/Main", meta: "1|0|SPREAD|TEAM2||-1.5|8", marketValue: 4.5, marketParameter: -1.5 },
+  ];
+  const sigs = bc.valueForEvent(B, P, "Heide", "Valle", { threshold: 0.02, maxPlausible: 0.25 });
+  assert.equal(sigs.length, 1);          // только линия −1.5, сторона A
+  assert.equal(sigs[0].kind, "SPREAD");
+  assert.equal(sigs[0].side, "A");
+  assert.equal(sigs[0].param, "-1.5");   // ЗНАКОВАЯ линия сохранена (для сеттлмента)
+  assert.ok(near(sigs[0].value, 0.10, 2e-2)); // 2.2 × 0.5 − 1
+});
+
 // ── Снимки (модель сессии): накат дельт + сборка состояния + разбор ответа опроса ──
 
 test("applySnapshot: рынки added/updated/removed + возврат writeTime", () => {

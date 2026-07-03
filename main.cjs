@@ -1176,11 +1176,14 @@ let valuePulseState = { on: false }; // статус value для шапки п�
 
 // ── Движок LIVE-value на фиде bettingco (Betano+Pinnacle синхронно, снимки ~1с). ТОЛЬКО ДЕТЕКЦИЯ ──
 // Простановка через Octo — отдельная фаза; здесь движок держит сессии, сканит и толкает сигналы в панель.
-let valueEngine = null, valueEngineTimer = null, valueEngineBusy = false, valueEngineStarting = false;
+let valueEngine = null, valueEngineTimer = null, valueEngineBusy = false, valueEngineStarting = false, valueAutosaveTimer = null;
 let sessionStart = 0;
 // ВСЯ сессия (НЕ чистим до её закрытия): key → {sport,sportType,t1,t2,market,side,maxValue,first,last,count,placed,betanoOdds}.
 // Время жизни валуя = last−first (от появления до последнего раза, что видели ≥ порога). placed — для будущей простановки (сейчас 0).
 const sessionSignals = new Map();
+// Событие-с-валуем → {t1,t2,sport,lastScore,status,ended} для сеттлмента: копим ПОСЛЕДНИЙ счёт из фида,
+// морозим финал (ended), когда событие ушло из фида. key = «t1~t2» (как s.t1~s.t2 в сигнале).
+const sessionEvents = new Map();
 
 async function startValueEngine() {
   // Условие работы: включён value + задан ключ Betano-фида. Иначе — остановить.
@@ -1192,11 +1195,13 @@ async function startValueEngine() {
     const eng = new ValueLiveEngine(settings.bettingcoKey, {});
     await eng.init();
     valueEngine = eng;
-    sessionStart = Date.now(); sessionSignals.clear(); // новая сессия статистики
+    sessionStart = Date.now(); sessionSignals.clear(); sessionEvents.clear(); // новая сессия статистики
     const c = eng.counts();
     logger.log("INFO", "[value] движок bettingco поднят: Betano игр " + c.games + " | Pinnacle игр " + c.pinGames);
     sendValuePulse({ scanning: false, note: "", matched: null });
     valueEngineTimer = setInterval(() => { valueEngineTick().catch((e) => logger.log("ERROR", "value-engine:", e && e.message)); }, 1500);
+    // Автосейв сессии каждые 2 мин (crash-safety на многодневный сбор): перезаписывает ТОТ ЖЕ файл (имя от sessionStart).
+    valueAutosaveTimer = setInterval(() => { try { flushSessionStats(); } catch (e) { logger.log("WARN", "[value] автосейв:", e && e.message); } }, 120000);
   } catch (e) {
     logger.log("ERROR", "[value] движок bettingco не поднялся:", e && e.message);
     sendValuePulse({ scanning: false, error: "bettingco: " + (e && e.message) });
@@ -1205,8 +1210,9 @@ async function startValueEngine() {
 
 function stopValueEngine() {
   if (valueEngineTimer) { clearInterval(valueEngineTimer); valueEngineTimer = null; }
+  if (valueAutosaveTimer) { clearInterval(valueAutosaveTimer); valueAutosaveTimer = null; }
   flushSessionStats();  // одна сессия = один файл: сохраняем при закрытии
-  valueEngine = null; sessionSignals.clear();
+  valueEngine = null; sessionSignals.clear(); sessionEvents.clear();
 }
 
 // Будущая простановка вызовет это, чтобы отметить валуй проставленным (сейчас не вызывается → placed=0).
@@ -1232,11 +1238,23 @@ async function valueEngineTick() {
     for (const s of sigs) {
       const k = s.t1 + "~" + s.t2 + "|" + s.market + "|" + s.side; // событие+рынок+сторона = уникальный валуй
       const e = sessionSignals.get(k);
-      if (e) { e.last = now; e.count++; e.maxValue = Math.max(e.maxValue, s.value); e.betanoOdds = s.betanoOdds; e.maxArb = Math.max(e.maxArb, s.arbPct); }
+      if (e) { e.last = now; e.count++; e.maxValue = Math.max(e.maxValue, s.value); e.maxArb = Math.max(e.maxArb, s.arbPct); } // betanoOdds/arbPct/valueEntry = ВХОД, не перезаписываем (ставили бы сразу)
       else {
-        sessionSignals.set(k, { sport: s.sport, sportType: s.sportType, t1: s.t1, t2: s.t2, market: s.market, side: s.side, maxValue: s.value, first: now, last: now, count: 1, placed: 0, betanoOdds: s.betanoOdds, arbPct: s.arbPct, maxArb: s.arbPct, margin: s.margin });
+        sessionSignals.set(k, { sport: s.sport, sportType: s.sportType, t1: s.t1, t2: s.t2, market: s.market, st: s.st, kind: s.kind, param: s.param, side: s.side, valueEntry: s.value, maxValue: s.value, first: now, last: now, count: 1, placed: 0, betanoOdds: s.betanoOdds, arbPct: s.arbPct, maxArb: s.arbPct, margin: s.margin });
         logger.log("INFO", "[value] 🎯 +" + (s.value * 100).toFixed(1) + "% | вилка " + (s.arbPct >= 0 ? "+" : "") + (s.arbPct * 100).toFixed(1) + "% | маржа " + (s.margin * 100).toFixed(1) + "% | " + s.sport + " | " + s.t1 + " vs " + s.t2 + " | " + s.market + " " + s.side + " | Bet " + s.betanoOdds + " vs fair " + s.fair.toFixed(3) + " | " + s.league);
       }
+    }
+    // Захват финального счёта под сеттлмент: на каждое событие-с-валуем копим ПОСЛЕДНИЙ счёт/статус из фида;
+    // ушло из фида → морозим (ended). finalScore пишется в файл сессии (settle сделаем после сбора).
+    const evMap = new Map(valueEngine.eventScores().map((e) => [e.key, e]));
+    for (const s of sigs) {
+      const ek = s.t1 + "~" + s.t2;
+      if (!sessionEvents.has(ek)) sessionEvents.set(ek, { t1: s.t1, t2: s.t2, sport: s.sport, lastScore: "", status: null, ended: false });
+    }
+    for (const [ek, ev] of sessionEvents) {
+      const cur = evMap.get(ek);
+      if (cur) { ev.lastScore = cur.score; ev.status = cur.status; ev.ended = false; } // ещё в фиде — счёт свежий
+      else if (!ev.ended) ev.ended = true;                                              // исчезло → финал зафиксирован
     }
     // сессионная сводка для панели (детект/проставлено/средние) — считаем по всей сессии
     let vSum = 0, lifeSum = 0, placed = 0; const arr = [...sessionSignals.values()];
@@ -1256,34 +1274,66 @@ function flushSessionStats() {
   const fsx = require("node:fs");
   const dir = join((logger.dir && logger.dir()) || app.getPath("userData"), "value-sessions");
   try { fsx.mkdirSync(dir, { recursive: true }); } catch { /* ignore */ }
+  const settleLib = require("./lib/settle.cjs");
   const start = sessionStart || Date.now(), end = Date.now(), arr = [...sessionSignals.values()], n = arr.length;
-  const buckets = { "3–5%": 0, "5–10%": 0, ">10%": 0 }; let vSum = 0, lifeSum = 0, placed = 0, arbN = 0; const bySport = new Map();
+  const val = (e) => (e.valueEntry != null ? e.valueEntry : e.maxValue); // value на ВХОДЕ (что и ставили бы)
+  const buckets = { "3–5%": 0, "5–10%": 0, ">10%": 0 }; let vSum = 0, lifeSum = 0, placed = 0, arbN = 0, arbSum = 0; const bySport = new Map();
+  // Бэктест (флэт 1 у.е.): сеттлим ЗАВЕРШЁННЫЕ события по финалу; реальный ROI vs ожидаемый (value входа) = близость к МО.
+  let bets = 0, wins = 0, units = 0, evSettled = 0;
   for (const e of arr) {
-    const v = e.maxValue * 100; if (v >= 10) buckets[">10%"]++; else if (v >= 5) buckets["5–10%"]++; else buckets["3–5%"]++;
-    vSum += e.maxValue; lifeSum += sigLife(e); if (e.placed) placed++; if ((e.maxArb || 0) > 0) arbN++; // хоть раз доходил до вилки
-    const bs = bySport.get(e.sport) || { n: 0, v: 0, l: 0 }; bs.n++; bs.v += e.maxValue; bs.l += sigLife(e); bySport.set(e.sport, bs);
+    const v = val(e) * 100; if (v >= 10) buckets[">10%"]++; else if (v >= 5) buckets["5–10%"]++; else buckets["3–5%"]++;
+    vSum += val(e); lifeSum += sigLife(e); if (e.placed) placed++; if ((e.maxArb || 0) > 0) arbN++; arbSum += (e.arbPct || 0);
+    const bs = bySport.get(e.sport) || { n: 0, v: 0, l: 0 }; bs.n++; bs.v += val(e); bs.l += sigLife(e); bySport.set(e.sport, bs);
+    const ev = sessionEvents.get(e.t1 + "~" + e.t2);
+    e._fin = ev && ev.lastScore ? ev.lastScore.split("|")[0].trim() + (ev.ended ? "" : " (live)") : "—";
+    if (ev && ev.ended && ev.lastScore) {
+      const r = settleLib.settle({ kind: e.kind, param: e.param, side: e.side, st: e.st, sportType: e.sportType, betanoOdds: e.betanoOdds, finalScore: ev.lastScore });
+      e._res = r.result; e._pnl = r.pnl;
+      if (r.pnl != null) { bets++; units += r.pnl; if (r.result === "win") wins++; evSettled += val(e); }
+    } else { e._res = "pending"; e._pnl = null; }
   }
+  const roiReal = bets ? units / bets : 0, evPred = bets ? evSettled / bets : 0, delta = roiReal - evPred;
   const iso = (t) => new Date(t).toISOString().replace("T", " ").slice(0, 19);
   const pad = (s, w) => String(s).padEnd(w);
-  const L = ["СЕССИЯ LIVE-VALUE (детект без ставок)",
-    "Старт:  " + iso(start), "Конец:  " + iso(end), "Длительность: " + ((end - start) / 60000).toFixed(1) + " мин", "",
-    "Задетектировано уникальных валуёв: " + n, "Проставлено: " + placed,
-    "Доходили до ВИЛКИ (arb>0): " + arbN + " из " + n + " (" + (n ? (arbN / n * 100).toFixed(0) : "0") + "%)",
-    "Распределение value%:  3–5%: " + buckets["3–5%"] + " | 5–10%: " + buckets["5–10%"] + " | >10%: " + buckets[">10%"],
-    "Средний value%: " + (n ? (vSum / n * 100).toFixed(1) : "0") + "%",
-    "Среднее время жизни валуя: " + (n ? (lifeSum / n).toFixed(1) : "0") + " с", "", "По спортам:"];
-  for (const [sp, bs] of [...bySport.entries()].sort((a, b) => b[1].n - a[1].n))
-    L.push("  " + pad(sp, 16) + " " + bs.n + " (ср " + (bs.v / bs.n * 100).toFixed(1) + "%, ср жизнь " + Math.round(bs.l / bs.n) + "с)");
-  // вилка (arbPct): вход = на момент появления, макс = лучшая за жизнь. >0 = реальная вилка %, <0 = ниже вилки. Ось калибровки.
   const arbS = (x) => (x >= 0 ? "+" : "") + (x * 100).toFixed(1) + "%";
-  L.push("", "СИГНАЛЫ (спорт | событие | рынок сторона | value% | вилка(вход/макс) | маржаPin | жил,с | ×| поставл.):");
+  const vpair = (a, b) => (a * 100 >= 0 ? "+" : "") + (a * 100).toFixed(1) + "→" + (b * 100 >= 0 ? "+" : "") + (b * 100).toFixed(1) + "%";
+  const L = ["СЕССИЯ LIVE-VALUE (детект + бумажный бэктест, без денег)",
+    "Старт:  " + iso(start), "Конец:  " + iso(end), "Длительность: " + ((end - start) / 60000).toFixed(1) + " мин", "",
+    "Задетектировано уникальных валуёв: " + n + " | проставлено: " + placed,
+    "Доходили до ВИЛКИ (arb>0): " + arbN + " из " + n + " (" + (n ? (arbN / n * 100).toFixed(0) : "0") + "%)",
+    "Распределение value%(вход):  3–5%: " + buckets["3–5%"] + " | 5–10%: " + buckets["5–10%"] + " | >10%: " + buckets[">10%"],
+    "Средний валуй (вход): " + (n ? (vSum / n * 100).toFixed(1) : "0") + "% | средняя вилка (вход): " + (n ? arbS(arbSum / n) : "0%"),
+    "Среднее время жизни валуя: " + (n ? (lifeSum / n).toFixed(1) : "0") + " с",
+    "",
+    "── БЭКТЕСТ (гипотетически, флэт 1 у.е., ставим на входе) ──",
+    "Ставок рассчитано (матч завершён): " + bets + " из " + n + " | зашло: " + wins + (bets ? " (" + (wins / bets * 100).toFixed(0) + "%)" : ""),
+    "Флэты профита (Σ у.е.): " + (units >= 0 ? "+" : "") + units.toFixed(2),
+    "Реальный ROI: " + arbS(roiReal) + " | ожидаемый (МО = ср. валуй входа): " + arbS(evPred),
+    "Δ = реальный − ожидаемый (близость к матожиданию): " + arbS(delta) + "  [>0 лучше прогноза · <0 хуже (валуй бумажный) · ≈0 модель точна]",
+    "", "По спортам:"];
+  for (const [sp, bs] of [...bySport.entries()].sort((a, b) => b[1].n - a[1].n))
+    L.push("  " + pad(sp, 16) + " " + bs.n + " (ср валуй " + (bs.v / bs.n * 100).toFixed(1) + "%, ср жизнь " + Math.round(bs.l / bs.n) + "с)");
+  L.push("", "СИГНАЛЫ (спорт | событие | рынок сторона | value(вх→макс) | вилка(вх/макс) | маржа | жил,с | × | финал | ставка | P/L):");
+  const resWord = { win: "зашла", lose: "не зашла", push: "возврат", na: "н/д", pending: "—" };
+  const pnlS = (x) => x == null ? "—" : (x >= 0 ? "+" : "") + x.toFixed(2);
   for (const e of arr.sort((a, b) => (b.maxArb || -9) - (a.maxArb || -9))) // сортировка по близости к вилке
     L.push("  " + pad(e.sport, 12) + " | " + e.t1 + " vs " + e.t2 + " | " + e.market + " " + e.side +
-      " | +" + (e.maxValue * 100).toFixed(1) + "% | вилка " + arbS(e.arbPct || 0) + "/" + arbS(e.maxArb || 0) +
-      " | маржа " + ((e.margin || 0) * 100).toFixed(1) + "% | " + sigLife(e) + "с | " + e.count + "× | " + (e.placed ? "да(" + e.placed + ")" : "нет"));
+      " | " + vpair(val(e), e.maxValue) + " | " + arbS(e.arbPct || 0) + "/" + arbS(e.maxArb || 0) +
+      " | " + ((e.margin || 0) * 100).toFixed(1) + "% | " + sigLife(e) + "с | " + e.count + "× | " + e._fin + " | " + resWord[e._res] + " | " + pnlS(e._pnl));
   const file = join(dir, "value-session-" + iso(start).replace(/[: ]/g, "-") + ".txt");
-  try { fsx.writeFileSync(file, L.join("\n") + "\n", "utf8"); logger.log("INFO", "[value] сессия сохранена: " + file + " (" + n + " валуёв, проставлено " + placed + ")"); }
+  try { fsx.writeFileSync(file, L.join("\n") + "\n", "utf8"); logger.log("INFO", "[value] сессия сохранена: " + file + " (" + n + " валуёв, ставок " + bets + ", флэты " + units.toFixed(2) + ")"); }
   catch (e) { logger.log("WARN", "[value] сессия не сохранена: " + e.message); }
+  // Машиночитаемый JSON рядом с .txt — источник для сводки за всё время (settle уже посчитан здесь).
+  const jsonRows = arr.map((e) => { const ev = sessionEvents.get(e.t1 + "~" + e.t2);
+    return { sport: e.sport, sportType: e.sportType, t1: e.t1, t2: e.t2, market: e.market, st: e.st, kind: e.kind, param: e.param,
+      side: e.side, valueEntry: val(e), valueMax: e.maxValue, arbEntry: e.arbPct, arbMax: e.maxArb, margin: e.margin,
+      lifeSec: sigLife(e), count: e.count, placed: e.placed, betanoOdds: e.betanoOdds,
+      finalScore: ev ? ev.lastScore : "", status: ev ? ev.status : null, ended: ev ? ev.ended : false, result: e._res, pnl: e._pnl }; });
+  const jfile = file.replace(/\.txt$/, ".json");
+  try { fsx.writeFileSync(jfile, JSON.stringify({ start: iso(start), end: iso(end),
+    durationMin: Number(((end - start) / 60000).toFixed(1)), detected: n, placed, reachedArb: arbN,
+    backtest: { bets, wins, units: Number(units.toFixed(4)), roiReal, evPred, delta }, signals: jsonRows }, null, 2), "utf8"); }
+  catch (e) { logger.log("WARN", "[value] JSON сессии не сохранён: " + e.message); }
   return file;
 }
 
