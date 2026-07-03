@@ -1178,7 +1178,7 @@ let valuePulseState = { on: false }; // статус value для шапки п�
 // ── Движок LIVE-value на фиде bettingco (Betano+Pinnacle синхронно, снимки ~1с). ТОЛЬКО ДЕТЕКЦИЯ ──
 // Простановка через Octo — отдельная фаза; здесь движок держит сессии, сканит и толкает сигналы в панель.
 let valueEngine = null, valueEngineTimer = null, valueEngineBusy = false, valueEngineStarting = false, valueAutosaveTimer = null;
-let valuePlaceBusy = false, valuePlaceCount = 0, valuePlaceDay = ""; // состояние ставочной части (свой busy/лимит/день)
+let valuePlaceBusy = false, valuePlaceCount = 0, valuePlaceDay = "", valuePlaceDiagAt = 0; // состояние ставочной части (busy/лимит/день/диаг)
 const valuePlacedKeys = new Set(); // исходы, уже пробованные на ставку в этой сессии (дедуп, без спама Octo)
 let sessionStart = 0;
 // ВСЯ сессия (НЕ чистим до её закрытия): key → {sport,sportType,t1,t2,market,side,maxValue,first,last,count,placed,betanoOdds}.
@@ -1286,9 +1286,18 @@ async function tryPlaceFromValueSignals(sigs) {
     kinds: (settings.valuePlaceKinds && settings.valuePlaceKinds.length) ? settings.valuePlaceKinds : null,
   };
   const pick = valueplace.choosePlacement(sigs, cfg, { placedToday: valuePlaceCount, maxPerDay: cfg.maxPerDay, placedKeys: valuePlacedKeys });
+  // Диагностика воронки (раз в ~20с) — на dry-run видно, ПОЧЕМУ ставим/не ставим (сигналы/годные/без ссылки).
+  if (Date.now() - valuePlaceDiagAt > 20000) {
+    valuePlaceDiagAt = Date.now();
+    const nElig = sigs.filter((s) => valueplace.eligible(s, cfg)).length, nNoLink = sigs.filter((s) => !s.link).length;
+    logger.log("INFO", "[value] простановка(" + (settings.valueLive ? "боевой" : "dry-run") + "): сигналов " + sigs.length + " | годных " + nElig + " | без ссылки " + nNoLink + " | пробовано " + valuePlacedKeys.size + (pick.skip ? " | " + pick.skip : ""));
+  }
   if (pick.skip || !pick.candidate) return;
   const c = pick.candidate;
   if (!c.stake) { logger.log("WARN", "[value] простановка: сумма ставки не задана (valueStake=0) — пропуск"); return; }
+  const booker = findBooker("betano");                          // рерайт домена фида (.cz/.ro/…) → страна аккаунта (.bg)
+  const target = betanoTarget(booker && booker.url);
+  if (target) c.url = localizeBetanoUrl(c.url, target);
   valuePlaceBusy = true;
   const live = !!settings.valueLive;
   logger.log("INFO", "[value] " + (live ? "СТАВЛЮ" : "DRY-RUN") + " " + c.t1 + " vs " + c.t2 + " | " + c.market + " " + c.side + " | " + c.desc + " @" + c.expectedOdds + " × " + c.stake + " | +" + (c.value * 100).toFixed(1) + "%");
