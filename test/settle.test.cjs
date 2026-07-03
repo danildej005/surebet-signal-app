@@ -48,6 +48,14 @@ test("settle: pnl от кэфа Betano на входе (флэт 1 у.е.), то
   assert.deepEqual(s.settle({ kind: "ML", param: "", side: "A", st: "/Main/Main", sportType: 3, betanoOdds: 2.0, finalScore: "" }), { result: "na", pnl: null }); // нет счёта → na
 });
 
+test("settleTennis: отказ/незавершённый матч → void (не сеттлим, не гадаем)", () => {
+  assert.equal(s.settleTennis("ML", "", "A", "/Main/Main", "6-1, 2-1").result, "void");            // 2-1 — сет не доигран
+  assert.equal(s.settleTennis("SPREAD", "-2.5", "A", "/Main/Main/Game", "6-1, 1-0").result, "void"); // ранний отказ
+  assert.equal(s.settleTennis("TOTAL", "20.5", "A", "/Main/Main/Game", "6-4, 3-6, 1-0").result, "void"); // супертай-брейк-как-сет
+  assert.equal(s.settle({ kind: "ML", param: "", side: "A", st: "/Main/Main", sportType: 3, betanoOdds: 2.0, finalScore: "6-1, 2-1" }).pnl, null); // void → pnl null
+  assert.equal(s.settleTennis("ML", "", "A", "/Main/Main", "6-1, 4-6, 7-5").result, "win");        // завершённый bo3 в 3 сета — ок
+});
+
 test("bucketIndex: дистанция до вилки → бакет", () => {
   assert.equal(s.bucketIndex(0.08), 0);   // вилка
   assert.equal(s.bucketIndex(-0.01), 1);  // −0…−2

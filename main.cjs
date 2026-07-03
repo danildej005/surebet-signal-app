@@ -1314,7 +1314,7 @@ function flushSessionStats() {
   for (const [sp, bs] of [...bySport.entries()].sort((a, b) => b[1].n - a[1].n))
     L.push("  " + pad(sp, 16) + " " + bs.n + " (ср валуй " + (bs.v / bs.n * 100).toFixed(1) + "%, ср жизнь " + Math.round(bs.l / bs.n) + "с)");
   L.push("", "СИГНАЛЫ (спорт | событие | рынок сторона | value(вх→макс) | вилка(вх/макс) | маржа | жил,с | × | финал | ставка | P/L):");
-  const resWord = { win: "зашла", lose: "не зашла", push: "возврат", na: "н/д", pending: "—" };
+  const resWord = { win: "зашла", lose: "не зашла", push: "возврат", void: "войд", na: "н/д", pending: "—" };
   const pnlS = (x) => x == null ? "—" : (x >= 0 ? "+" : "") + x.toFixed(2);
   for (const e of arr.sort((a, b) => (b.maxArb || -9) - (a.maxArb || -9))) // сортировка по близости к вилке
     L.push("  " + pad(e.sport, 12) + " | " + e.t1 + " vs " + e.t2 + " | " + e.market + " " + e.side +
