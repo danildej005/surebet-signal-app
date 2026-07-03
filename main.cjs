@@ -1214,13 +1214,17 @@ function markValuePlaced(key) { const e = sessionSignals.get(key); if (e) e.plac
 
 const sigLife = (e) => Math.round((e.last - e.first) / 1000); // время жизни валуя, с
 
-// Один цикл движка: опрос обеих книг (снимки) → скан value → накопление сессионной статы → пульс в панель.
+// Один цикл движка: опрос обеих БК (снимки) → скан value → накопление сессионной статы → пульс в панель.
 async function valueEngineTick() {
   if (valueEngineBusy || !valueEngine || botBusy) return;
   valueEngineBusy = true;
   try {
     const st = await valueEngine.poll();
-    if (!st.ok) { sendValuePulse({ note: st.reinit ? "переинициализация плеча…" : (st.rate ? "rate-limit…" : "") }); return; }
+    if (!st.ok) {
+      if (st.reinitFail) logger.log("WARN", "[value] реинит плеча не удался (" + st.reinitFail + ") — держим прошлое состояние, ретрай");
+      sendValuePulse({ note: st.reinitFail ? "реинит…" : st.reinit ? "переинициализация плеча…" : (st.rate ? "rate-limit…" : "") });
+      return;
+    }
     const sigs = valueEngine.scan({ threshold: Number(settings.valueThreshold) || 0.03, maxPlausible: 0.25,
       marginMax: Number(settings.valueMarginMax) || 0,   // 0 = фильтр маржи ВЫКЛ (калибровка: видим всё); включим после
       oddsMin: Number(settings.valueOddsMin) || 0, oddsMax: Number(settings.valueOddsMax) || 0 });

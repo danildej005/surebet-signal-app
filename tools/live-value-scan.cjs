@@ -82,7 +82,7 @@ async function initBook(book) {
             " | Bet " + s.betanoOdds + " vs fair " + s.fair.toFixed(3) + " | " + s.league + (s.score ? " | " + s.score : ""));
         }
       }
-      // свежесть плеч = возраст курсора каждой книги (мс от now); оба должны быть малы (иначе плечо отстаёт)
+      // свежесть плеч = возраст курсора каждой БК (мс от now); оба должны быть малы (иначе плечо отстаёт)
       const ageB = Date.now() - new Date(B.cursor), ageP = Date.now() - new Date(P.cursor);
       if (cycles % 10 === 0 || sigs.length) log("цикл " + cycles + ": сигналов " + sigs.length + " | уникальных " + seen.size + " | возраст B/P " + ageB + "/" + ageP + "мс | опрос " + (Date.now() - t0) + "мс");
     } catch (e) { errs++; log("🔴 цикл: " + e.message); await sleep(1500); }
