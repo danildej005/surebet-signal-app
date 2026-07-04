@@ -58,8 +58,9 @@
     </div>
     <div class="grid2">
       <label>Лимит ставок в сутки<input id="valueMaxPerDay" type="number" min="0" step="1" placeholder="20" /></label>
-      <label>Ставок на событие (0=без лимита)<input id="valuePlaceMaxPerEvent" type="number" min="0" step="1" placeholder="1" /></label>
+      <label>Ставок на маркет в событии (не две форы)<input id="valuePlaceMaxPerMarket" type="number" min="0" step="1" placeholder="1" /></label>
     </div>
+    <label>Ставок на событие ВСЕГО (0=без лимита; доп-ставки в разных маркетах ок)<input id="valuePlaceMaxPerEvent" type="number" min="0" step="1" placeholder="0" /></label>
     <label class="liverow"><input type="checkbox" id="valueLive" /> <b>⚡ Боевой</b> — реальные ставки (выкл = dry-run)</label>
     <label class="liverow"><input type="checkbox" id="valuePlace" /> <b>🅱️ Простановка</b> — ставить сигналы на Betano через Octo (нужен octoMode; выкл = только детект)</label>
     <label class="liverow" style="padding-left:22px;"><input type="checkbox" id="valuePlaceRequireArb" /> только дошедшие до <b>вилки</b> (arb&gt;0)</label>
