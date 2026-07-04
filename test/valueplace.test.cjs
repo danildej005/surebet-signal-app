@@ -75,3 +75,13 @@ test("choosePlacement: лучший по value, дедуп уже ставлен
   assert.equal(vp.choosePlacement(sigs, { maxPerDay: 3 }, { placedToday: 3 }).skip, "лимит/сутки");
   assert.equal(vp.choosePlacement([], {}, {}).skip, "нет подходящих");
 });
+
+test("choosePlacement: лимит ставок на СОБЫТИЕ (maxPerEvent) — не берём доп-ставку в тот же матч", () => {
+  const sigs = [
+    sig({ kind: "ML", side: "A", value: 0.03, market: "/Main/Main ML", st: "/Main/Main" }),
+    sig({ kind: "SPREAD", param: "-6.5", side: "A", value: 0.08, market: "/Main/Main/Game SPREAD -6.5", st: "/Main/Main/Game" }),
+  ];
+  const placed = new Set(["Guido Ivan Justo~Olle Wallin|/Main/Main ML|A"]); // один исход по событию уже ставлен
+  assert.equal(vp.choosePlacement(sigs, { minValue: 0.02, maxPerEvent: 1 }, { placedKeys: placed }).skip, "нет подходящих"); // лимит 1 → второго не берём
+  assert.equal(vp.choosePlacement(sigs, { minValue: 0.02, maxPerEvent: 0 }, { placedKeys: placed }).candidate.market, "/Main/Main/Game SPREAD -6.5"); // 0 = без лимита
+});

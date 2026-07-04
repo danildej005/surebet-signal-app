@@ -488,3 +488,20 @@ test("sameSideSelected: индивидуальный тотал ОДНОЙ ко�
   assert.strictEqual(sameSideSelected("San Francisco Giants Over 4.5 1.95", "San Francisco Giants Under 4.5 2.05"), false);
   assert.strictEqual(sameSideSelected("Giants Over 4.5", "Giants Over 4.5"), true); // оба Over = не хедж → блок
 });
+
+test("Betano фора-сеты: сторона A (team1) — НЕ берём фору ОППОНЕНТА, даже если в пуле есть счёт (баг 0.10.9)", () => {
+  const URL = "https://www.betano.bg/en/match-odds/calvin-hemery-marvin-moeller/12345678/"; // player1 = Calvin
+  // Только фора оппонента (Marvin -1.5), нашей −1.5 нет → ОТКАЗ, а не Marvin −1.5
+  const only = withIndex([
+    { text: "Calvin Hemery 1.87" }, { text: "Marvin Moeller 1.90" },
+    { text: "Marvin Moeller -1.5 2.47" }, { text: "Calvin Hemery +1.5 1.53" },
+  ]);
+  assert.strictEqual(pickOutcome({ desc: "AH1(-1.5)", expectedOdds: 2.92, buttons: only, eventUrl: URL, unit: "set", subject: "Calvin Hemery" }), null);
+  // Есть счёт «2 - 0» (Calvin 2:0 = Calvin −1.5 сеты) → берём СЧЁТ нашей стороны, не Marvin −1.5
+  const withScore = withIndex([
+    { text: "Calvin Hemery 1.87" }, { text: "Marvin Moeller 1.90" },
+    { text: "Marvin Moeller -1.5 2.47" }, { text: "2 - 0 2.90" }, { text: "0 - 2 4.10" },
+  ]);
+  const r = pickOutcome({ desc: "AH1(-1.5)", expectedOdds: 2.92, buttons: withScore, eventUrl: URL, unit: "set", subject: "Calvin Hemery" });
+  assert.ok(r && /2\s*-\s*0/.test(r.text), "должен выбрать счёт 2-0, а не Marvin -1.5; выбрал: " + (r && r.text));
+});

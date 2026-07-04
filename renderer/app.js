@@ -21,6 +21,7 @@ function renderStatus(s) {
     $("valueOddsMax").value = v.valueOddsMax || "";
     if (v.valueStake) $("valueStake").value = v.valueStake;
     $("valueMaxPerDay").value = v.valueMaxPerDay != null ? v.valueMaxPerDay : 20;
+    if ($("valuePlaceMaxPerEvent")) $("valuePlaceMaxPerEvent").value = v.valuePlaceMaxPerEvent != null ? v.valuePlaceMaxPerEvent : 1;
     $("valueLive").checked = !!v.valueLive;
     if ($("valuePlace")) $("valuePlace").checked = !!v.valuePlace;
     if ($("valuePlaceRequireArb")) $("valuePlaceRequireArb").checked = !!v.valuePlaceRequireArb;
@@ -156,6 +157,7 @@ function saveValue() {
     valueThreshold: (Number($("valueThreshold").value) || 5) / 100,
     valueStake: Number($("valueStake").value) || 0,
     valueMaxPerDay: Number($("valueMaxPerDay").value) || 0,
+    valuePlaceMaxPerEvent: $("valuePlaceMaxPerEvent") ? (Number($("valuePlaceMaxPerEvent").value) || 0) : 1,
     valueOddsMin: Number($("valueOddsMin").value) || 0,
     valueOddsMax: Number($("valueOddsMax").value) || 0,
     valueLive: $("valueLive").checked,

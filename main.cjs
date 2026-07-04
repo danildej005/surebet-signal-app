@@ -1297,6 +1297,7 @@ async function tryPlaceFromValueSignals(sigs) {
     minValue: Number(settings.valueThreshold) || 0.02, stake: Number(settings.valueStake) || 0,
     oddsMin: Number(settings.valueOddsMin) || 0, oddsMax: Number(settings.valueOddsMax) || 0,
     maxPerDay: Number(settings.valueMaxPerDay) || 0, requireArb: !!settings.valuePlaceRequireArb,
+    maxPerEvent: Number(settings.valuePlaceMaxPerEvent) || 0, // лимит ставок на одно событие (0 = без лимита)
     kinds: (settings.valuePlaceKinds && settings.valuePlaceKinds.length) ? settings.valuePlaceKinds : null,
   };
   const pick = valueplace.choosePlacement(sigs, cfg, { placedToday: valuePlaceCount, maxPerDay: cfg.maxPerDay, placedKeys: valuePlacedKeys });
@@ -1435,6 +1436,8 @@ async function runValueCycle(c, live) {
   }
   if (!onEvent) return { ok: false, error: "событие betano.bg не открылось" };
   const r = await placeBet("betano", c.stake, live);
+  // Очистить купон после НЕзавершённой ставки (dry-run или не прошло) — не оставлять выбор висеть до следующей попытки.
+  if (!r.placed) { try { const bw = bookerWin("betano"); if (bw && !bw.isDestroyed() && BETSLIP.betano) await clearBetslip(bw, BETSLIP.betano); } catch { /* ignore */ } }
   return { ...r, candidate: c };
 }
 
@@ -1950,6 +1953,7 @@ ipcMain.handle("save-settings", (_e, patch) => {
   if (typeof patch.valuePlace === "boolean") clean.valuePlace = patch.valuePlace;
   if (typeof patch.valuePlaceRequireArb === "boolean") clean.valuePlaceRequireArb = patch.valuePlaceRequireArb;
   if (Array.isArray(patch.valuePlaceKinds)) clean.valuePlaceKinds = patch.valuePlaceKinds.map(String);
+  if (patch.valuePlaceMaxPerEvent !== undefined) clean.valuePlaceMaxPerEvent = Math.max(0, Number(patch.valuePlaceMaxPerEvent) || 0);
   if (Array.isArray(patch.valueSports)) clean.valueSports = patch.valueSports.map((s) => ({ key: String(s.key || ""), name: String(s.name || ""), oa: String(s.oa || ""), ps: String(s.ps || ""), on: !!s.on, exclude: Array.isArray(s.exclude) ? s.exclude.map(String) : [] }));
   if (Array.isArray(patch.valueMarkets)) clean.valueMarkets = patch.valueMarkets.map((m) => String(m));
   if (patch.valueOddsMin !== undefined) clean.valueOddsMin = Math.max(0, Number(patch.valueOddsMin) || 0);
