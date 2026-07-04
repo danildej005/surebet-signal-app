@@ -21,8 +21,9 @@ function renderStatus(s) {
     $("valueOddsMax").value = v.valueOddsMax || "";
     if (v.valueStake) $("valueStake").value = v.valueStake;
     $("valueMaxPerDay").value = v.valueMaxPerDay != null ? v.valueMaxPerDay : 20;
-    if ($("valuePlaceMaxPerMarket")) $("valuePlaceMaxPerMarket").value = v.valuePlaceMaxPerMarket != null ? v.valuePlaceMaxPerMarket : 1;
-    if ($("valuePlaceMaxPerEvent")) $("valuePlaceMaxPerEvent").value = v.valuePlaceMaxPerEvent != null ? v.valuePlaceMaxPerEvent : 0;
+    if ($("valuePlaceDupExtra")) $("valuePlaceDupExtra").value = v.valuePlaceDupExtra != null ? v.valuePlaceDupExtra : 0;
+    if ($("valuePlaceEventExtra")) $("valuePlaceEventExtra").value = v.valuePlaceEventExtra != null ? v.valuePlaceEventExtra : 0;
+    if ($("valuePlaceMarketExtra")) $("valuePlaceMarketExtra").value = v.valuePlaceMarketExtra != null ? v.valuePlaceMarketExtra : 0;
     $("valueLive").checked = !!v.valueLive;
     if ($("valuePlace")) $("valuePlace").checked = !!v.valuePlace;
     if ($("valuePlaceRequireArb")) $("valuePlaceRequireArb").checked = !!v.valuePlaceRequireArb;
@@ -158,8 +159,9 @@ function saveValue() {
     valueThreshold: (Number($("valueThreshold").value) || 5) / 100,
     valueStake: Number($("valueStake").value) || 0,
     valueMaxPerDay: Number($("valueMaxPerDay").value) || 0,
-    valuePlaceMaxPerMarket: $("valuePlaceMaxPerMarket") ? (Number($("valuePlaceMaxPerMarket").value) || 0) : 1,
-    valuePlaceMaxPerEvent: $("valuePlaceMaxPerEvent") ? (Number($("valuePlaceMaxPerEvent").value) || 0) : 0,
+    valuePlaceDupExtra: $("valuePlaceDupExtra") ? (Number($("valuePlaceDupExtra").value) || 0) : 0,
+    valuePlaceEventExtra: $("valuePlaceEventExtra") ? (Number($("valuePlaceEventExtra").value) || 0) : 0,
+    valuePlaceMarketExtra: $("valuePlaceMarketExtra") ? (Number($("valuePlaceMarketExtra").value) || 0) : 0,
     valueOddsMin: Number($("valueOddsMin").value) || 0,
     valueOddsMax: Number($("valueOddsMax").value) || 0,
     valueLive: $("valueLive").checked,

@@ -1180,7 +1180,7 @@ let valuePulseState = { on: false }; // статус value для шапки п�
 let valueEngine = null, valueEngineTimer = null, valueEngineBusy = false, valueEngineStarting = false, valueAutosaveTimer = null, valueEngineNextTry = 0;
 let valuePlaceBusy = false, valuePlaceCount = 0, valuePlaceDay = "", valuePlaceDiagAt = 0; // состояние ставочной части (busy/лимит/день/диаг)
 let valueRun = false; // сессия value запущена ПОЛЬЗОВАТЕЛЕМ (кнопкой value-run), НЕ тумблером — движок стартует только при этом
-const valuePlacedKeys = new Set(); // исходы, уже пробованные на ставку в этой сессии (дедуп, без спама Octo)
+const valuePlaced = []; // sigKey'и поставленных/пробованных в сессии, С ПОВТОРАМИ (для лимита дублей). Лимиты — в valueplace.choosePlacement
 let sessionStart = 0;
 // ВСЯ сессия (НЕ чистим до её закрытия): key → {sport,sportType,t1,t2,market,side,maxValue,first,last,count,placed,betanoOdds}.
 // Время жизни валуя = last−first (от появления до последнего раза, что видели ≥ порога). placed — для будущей простановки (сейчас 0).
@@ -1199,7 +1199,7 @@ async function startValueEngine() {
     const eng = new ValueLiveEngine(settings.bettingcoKey, { onInitDiag: (bk, shape, n) => logger.log("WARN", "[value] " + bk + " init ждёт (" + shape + "), попытка " + n) });
     await eng.init();
     valueEngine = eng;
-    sessionStart = Date.now(); sessionSignals.clear(); sessionEvents.clear(); valuePlacedKeys.clear(); valuePlaceCount = 0; // новая сессия
+    sessionStart = Date.now(); sessionSignals.clear(); sessionEvents.clear(); valuePlaced.length = 0; valuePlaceCount = 0; // новая сессия
     const c = eng.counts();
     logger.log("INFO", "[value] движок bettingco поднят: Betano игр " + c.games + " | Pinnacle игр " + c.pinGames);
     // Конфиг запуска в лог — чтобы сразу видеть, что реально включено (частый ловец: valuePlace off / octoMode off / стейк=0).
@@ -1297,16 +1297,17 @@ async function tryPlaceFromValueSignals(sigs) {
     minValue: Number(settings.valueThreshold) || 0.02, stake: Number(settings.valueStake) || 0,
     oddsMin: Number(settings.valueOddsMin) || 0, oddsMax: Number(settings.valueOddsMax) || 0,
     maxPerDay: Number(settings.valueMaxPerDay) || 0, requireArb: !!settings.valuePlaceRequireArb,
-    maxPerEvent: Number(settings.valuePlaceMaxPerEvent) || 0, // всего ставок на событие (0 = без лимита)
-    maxPerMarket: settings.valuePlaceMaxPerMarket != null ? Number(settings.valuePlaceMaxPerMarket) : 1, // ставок на событие+маркет (деф 1)
+    dupExtra: Number(settings.valuePlaceDupExtra) || 0,        // дубли (тот же исход): доп к первой
+    eventExtra: Number(settings.valuePlaceEventExtra) || 0,    // доп ставок на матч (всего)
+    marketExtra: Number(settings.valuePlaceMarketExtra) || 0,  // доп ставок в одном маркете (фора/тотал/победа)
     kinds: (settings.valuePlaceKinds && settings.valuePlaceKinds.length) ? settings.valuePlaceKinds : null,
   };
-  const pick = valueplace.choosePlacement(sigs, cfg, { placedToday: valuePlaceCount, maxPerDay: cfg.maxPerDay, placedKeys: valuePlacedKeys });
+  const pick = valueplace.choosePlacement(sigs, cfg, { placedToday: valuePlaceCount, maxPerDay: cfg.maxPerDay, placed: valuePlaced });
   // Диагностика воронки (раз в ~20с) — на dry-run видно, ПОЧЕМУ ставим/не ставим (сигналы/годные/без ссылки).
   if (Date.now() - valuePlaceDiagAt > 20000) {
     valuePlaceDiagAt = Date.now();
     const nElig = sigs.filter((s) => valueplace.eligible(s, cfg)).length, nNoLink = sigs.filter((s) => !s.link).length;
-    logger.log("INFO", "[value] простановка(" + (settings.valueLive ? "боевой" : "dry-run") + "): сигналов " + sigs.length + " | годных " + nElig + " | без ссылки " + nNoLink + " | пробовано " + valuePlacedKeys.size + (pick.skip ? " | " + pick.skip : ""));
+    logger.log("INFO", "[value] простановка(" + (settings.valueLive ? "боевой" : "dry-run") + "): сигналов " + sigs.length + " | годных " + nElig + " | без ссылки " + nNoLink + " | пробовано " + valuePlaced.length + (pick.skip ? " | " + pick.skip : ""));
   }
   if (pick.skip || !pick.candidate) return;
   const c = pick.candidate;
@@ -1319,7 +1320,7 @@ async function tryPlaceFromValueSignals(sigs) {
   logger.log("INFO", "[value] " + (live ? "СТАВЛЮ" : "DRY-RUN") + " " + c.t1 + " vs " + c.t2 + " | " + c.market + " " + c.side + " | " + c.desc + " @" + c.expectedOdds + " × " + c.stake + " | +" + (c.value * 100).toFixed(1) + "%");
   try {
     const res = await runValueCycle(c, live);
-    valuePlacedKeys.add(c.key); // пробовали — не долбим этот исход каждый тик (успех/неудача не важно)
+    valuePlaced.push(c.key); // пробовали — учитываем в лимитах (дубли/матч/маркет); дедуп исхода = дубли-лимит
     // Пометка способа выбора (для отдельной статы): how=name/desc/id/fav; fav = БЕЗЫМЯННАЯ фора, привязана по фавориту.
     const howTag = res && res.how ? " [how=" + res.how + (res.how === "fav" ? " #безымянная-фора(по фавориту)" : "") + "]" : "";
     if (res && res.placed) { valuePlaceCount++; markValuePlaced(c.key); logger.log("INFO", "[value] ✅ ПОСТАВЛЕНО: " + (res.selected || c.desc) + " @" + (res.selectedOdds || c.expectedOdds) + howTag); }
@@ -1956,8 +1957,9 @@ ipcMain.handle("save-settings", (_e, patch) => {
   if (typeof patch.valuePlace === "boolean") clean.valuePlace = patch.valuePlace;
   if (typeof patch.valuePlaceRequireArb === "boolean") clean.valuePlaceRequireArb = patch.valuePlaceRequireArb;
   if (Array.isArray(patch.valuePlaceKinds)) clean.valuePlaceKinds = patch.valuePlaceKinds.map(String);
-  if (patch.valuePlaceMaxPerEvent !== undefined) clean.valuePlaceMaxPerEvent = Math.max(0, Number(patch.valuePlaceMaxPerEvent) || 0);
-  if (patch.valuePlaceMaxPerMarket !== undefined) clean.valuePlaceMaxPerMarket = Math.max(0, Number(patch.valuePlaceMaxPerMarket) || 0);
+  if (patch.valuePlaceDupExtra !== undefined) clean.valuePlaceDupExtra = Math.max(0, Number(patch.valuePlaceDupExtra) || 0);
+  if (patch.valuePlaceEventExtra !== undefined) clean.valuePlaceEventExtra = Math.max(0, Number(patch.valuePlaceEventExtra) || 0);
+  if (patch.valuePlaceMarketExtra !== undefined) clean.valuePlaceMarketExtra = Math.max(0, Number(patch.valuePlaceMarketExtra) || 0);
   if (Array.isArray(patch.valueSports)) clean.valueSports = patch.valueSports.map((s) => ({ key: String(s.key || ""), name: String(s.name || ""), oa: String(s.oa || ""), ps: String(s.ps || ""), on: !!s.on, exclude: Array.isArray(s.exclude) ? s.exclude.map(String) : [] }));
   if (Array.isArray(patch.valueMarkets)) clean.valueMarkets = patch.valueMarkets.map((m) => String(m));
   if (patch.valueOddsMin !== undefined) clean.valueOddsMin = Math.max(0, Number(patch.valueOddsMin) || 0);

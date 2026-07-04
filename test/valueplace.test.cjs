@@ -59,7 +59,7 @@ test("eligible: фильтры (ссылка, порог value, коридор �
   assert.equal(vp.eligible(sig({ kind: "SCORE", param: "", side: "A", market: "x" }), {}), false); // неумеемый рынок
 });
 
-test("choosePlacement: лучший по value, дедуп уже ставленных, лимиты/занятость", () => {
+test("choosePlacement: лучший по value + занятость/суточный лимит/пусто", () => {
   const sigs = [
     sig({ kind: "ML", side: "A", value: 0.03, market: "/Main/Main ML", st: "/Main/Main" }),
     sig({ kind: "SPREAD", param: "-6.5", side: "A", value: 0.08, market: "/Main/Main/Game SPREAD -6.5", st: "/Main/Main/Game" }),
@@ -67,30 +67,33 @@ test("choosePlacement: лучший по value, дедуп уже ставлен
   const best = vp.choosePlacement(sigs, { minValue: 0.02, stake: 5 }, {});
   assert.equal(best.candidate.market, "/Main/Main/Game SPREAD -6.5"); // 8% > 3%
   assert.equal(best.candidate.stake, 5);
-  // дедуп: этот ключ уже ставлен → берём следующий (ML)
-  const placed = new Set(["Guido Ivan Justo~Olle Wallin|/Main/Main/Game SPREAD -6.5|A"]);
-  assert.equal(vp.choosePlacement(sigs, { minValue: 0.02 }, { placedKeys: placed }).candidate.market, "/Main/Main ML");
-  // занятость / суточный лимит → skip
   assert.equal(vp.choosePlacement(sigs, {}, { busy: true }).skip, "занято");
   assert.equal(vp.choosePlacement(sigs, { maxPerDay: 3 }, { placedToday: 3 }).skip, "лимит/сутки");
   assert.equal(vp.choosePlacement([], {}, {}).skip, "нет подходящих");
 });
 
-test("choosePlacement: лимит ставок на СОБЫТИЕ (maxPerEvent) — не берём доп-ставку в тот же матч", () => {
-  const sigs = [
-    sig({ kind: "ML", side: "A", value: 0.03, market: "/Main/Main ML", st: "/Main/Main" }),
-    sig({ kind: "SPREAD", param: "-6.5", side: "A", value: 0.08, market: "/Main/Main/Game SPREAD -6.5", st: "/Main/Main/Game" }),
-  ];
-  const placed = new Set(["Guido Ivan Justo~Olle Wallin|/Main/Main ML|A"]); // один исход по событию уже ставлен
-  assert.equal(vp.choosePlacement(sigs, { minValue: 0.02, maxPerEvent: 1 }, { placedKeys: placed }).skip, "нет подходящих"); // лимит 1 → второго не берём
-  assert.equal(vp.choosePlacement(sigs, { minValue: 0.02, maxPerEvent: 0, maxPerMarket: 0 }, { placedKeys: placed }).candidate.market, "/Main/Main/Game SPREAD -6.5"); // 0 = без лимита
+test("choosePlacement: ДУБЛИ (dupExtra) — тот же ТОЧНЫЙ исход; 0 = раз, 1 = +1", () => {
+  const s = sig({ kind: "ML", side: "A", value: 0.05, market: "/Main/Main ML", st: "/Main/Main" });
+  const key = "Guido Ivan Justo~Olle Wallin|/Main/Main ML|A";
+  const cfg = (d) => ({ minValue: 0.02, dupExtra: d, eventExtra: 9, marketExtra: 9 }); // матч/маркет не режут
+  assert.equal(vp.choosePlacement([s], cfg(0), { placed: [key] }).skip, "нет подходящих");        // dupExtra=0: уже стоит → нет
+  assert.equal(vp.choosePlacement([s], cfg(1), { placed: [key] }).candidate.market, "/Main/Main ML"); // dupExtra=1: один дубль ок
+  assert.equal(vp.choosePlacement([s], cfg(1), { placed: [key, key] }).skip, "нет подходящих");   // два уже стоят → третий нет
 });
 
-test("choosePlacement: лимит на МАРКЕТ — не две ставки в одном маркете (фора), но ДРУГОЙ маркет матча ок", () => {
-  const sSpread2 = sig({ kind: "SPREAD", param: "-2.5", side: "A", value: 0.04, market: "/Main/Main/Game SPREAD -2.5", st: "/Main/Main/Game" });
+test("choosePlacement: ДОП-В-МАТЧЕ (eventExtra) — 0 = 1 ставка на матч, 1 = +1 в другом маркете", () => {
+  const sml = sig({ kind: "ML", side: "A", value: 0.05, market: "/Main/Main ML", st: "/Main/Main" });
+  const stot = sig({ kind: "TOTAL", param: "27.5", side: "A", value: 0.04, market: "/Main/Main/Game TOTAL 27.5", st: "/Main/Main/Game" });
+  const placed = ["Guido Ivan Justo~Olle Wallin|/Main/Main/Game SPREAD -6.5|A"]; // 1 ставка в матче (фора)
+  assert.equal(vp.choosePlacement([sml, stot], { minValue: 0.02, eventExtra: 0, marketExtra: 9 }, { placed }).skip, "нет подходящих"); // матч занят
+  assert.equal(vp.choosePlacement([sml, stot], { minValue: 0.02, eventExtra: 1, marketExtra: 9 }, { placed }).candidate.market, "/Main/Main ML"); // +1 в матче → лучший (ML)
+});
+
+test("choosePlacement: ДОП-В-МАРКЕТЕ (marketExtra) — 0 = не две форы, но другой маркет матча ок", () => {
+  const sSpread2 = sig({ kind: "SPREAD", param: "-2.5", side: "A", value: 0.08, market: "/Main/Main/Game SPREAD -2.5", st: "/Main/Main/Game" });
   const sTotal = sig({ kind: "TOTAL", param: "27.5", side: "A", value: 0.06, market: "/Main/Main/Game TOTAL 27.5", st: "/Main/Main/Game" });
-  const placed = new Set(["Guido Ivan Justo~Olle Wallin|/Main/Main/Game SPREAD -6.5|A"]); // одна фора(геймы) уже ставлена
-  // maxPerMarket=1: вторую фору того же матча НЕ берём, а тотал того же матча — берём
-  assert.equal(vp.choosePlacement([sSpread2, sTotal], { minValue: 0.02, maxPerMarket: 1 }, { placedKeys: placed }).candidate.market, "/Main/Main/Game TOTAL 27.5");
-  assert.equal(vp.choosePlacement([sSpread2], { minValue: 0.02, maxPerMarket: 1 }, { placedKeys: placed }).skip, "нет подходящих"); // маркет фора уже занят
+  const placed = ["Guido Ivan Justo~Olle Wallin|/Main/Main/Game SPREAD -6.5|A"]; // одна фора(геймы) уже стоит
+  // eventExtra=5 (матч не режет), marketExtra=0: 2-ю фору НЕ берём (маркет занят), тотал того же матча — берём
+  assert.equal(vp.choosePlacement([sSpread2, sTotal], { minValue: 0.02, eventExtra: 5, marketExtra: 0 }, { placed }).candidate.market, "/Main/Main/Game TOTAL 27.5");
+  assert.equal(vp.choosePlacement([sSpread2], { minValue: 0.02, eventExtra: 5, marketExtra: 0 }, { placed }).skip, "нет подходящих");
 });

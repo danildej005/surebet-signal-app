@@ -56,11 +56,13 @@
       <label>Кэф от<input id="valueOddsMin" type="number" min="0" step="0.05" placeholder="0 = без границы" /></label>
       <label>Кэф до<input id="valueOddsMax" type="number" min="0" step="0.05" placeholder="0 = без границы" /></label>
     </div>
+    <label>Лимит ставок в сутки<input id="valueMaxPerDay" type="number" min="0" step="1" placeholder="20" /></label>
+    <div class="muted" style="margin-top:6px;">Доп-ставки (0 = только первая, N = ещё N сверх). Все три НЕЗАВИСИМЫ — ставка проходит, только если укладывается во ВСЕ:</div>
     <div class="grid2">
-      <label>Лимит ставок в сутки<input id="valueMaxPerDay" type="number" min="0" step="1" placeholder="20" /></label>
-      <label>Ставок на маркет в событии (не две форы)<input id="valuePlaceMaxPerMarket" type="number" min="0" step="1" placeholder="1" /></label>
+      <label>Доп в матче<input id="valuePlaceEventExtra" type="number" min="0" step="1" placeholder="0" /></label>
+      <label>Доп в маркете (форы/тоталы/победы)<input id="valuePlaceMarketExtra" type="number" min="0" step="1" placeholder="0" /></label>
     </div>
-    <label>Ставок на событие ВСЕГО (0=без лимита; доп-ставки в разных маркетах ок)<input id="valuePlaceMaxPerEvent" type="number" min="0" step="1" placeholder="0" /></label>
+    <label>Дубли (тот же исход)<input id="valuePlaceDupExtra" type="number" min="0" step="1" placeholder="0" /></label>
     <label class="liverow"><input type="checkbox" id="valueLive" /> <b>⚡ Боевой</b> — реальные ставки (выкл = dry-run)</label>
     <label class="liverow"><input type="checkbox" id="valuePlace" /> <b>🅱️ Простановка</b> — ставить сигналы на Betano через Octo (нужен octoMode; выкл = только детект)</label>
     <label class="liverow" style="padding-left:22px;"><input type="checkbox" id="valuePlaceRequireArb" /> только дошедшие до <b>вилки</b> (arb&gt;0)</label>
