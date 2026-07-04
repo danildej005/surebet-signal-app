@@ -6,7 +6,7 @@ const assert = require("node:assert");
 const vp = require("../lib/valueplace.cjs");
 const bk = require("../lib/bookers.cjs");
 
-const sig = (o) => Object.assign({ t1: "Guido Ivan Justo", t2: "Olle Wallin", link: "https://www.betano.bg/live/x/86655013/", betanoOdds: 2.0, value: 0.05, arbPct: -0.01 }, o);
+const sig = (o) => Object.assign({ t1: "Guido Ivan Justo", t2: "Olle Wallin", link: "https://www.betano.bg/live/x/86655013/", betanoOdds: 2.0, value: 0.05, arbPct: -0.01, sportType: 3 }, o);
 
 test("betDesc + classifyDesc: ML → «1»/«2» (победа стороны), subject=команда", () => {
   const a = vp.betDesc(sig({ kind: "ML", param: "", side: "A", market: "/Main/Main ML" }));
@@ -57,6 +57,7 @@ test("eligible: фильтры (ссылка, порог value, коридор �
   assert.equal(vp.eligible(sig({ ...base, arbPct: 0.03 }), { requireArb: true }), true);       // вилка
   assert.equal(vp.eligible(sig({ ...base, kind: "TOTAL", param: "27.5", st: "/Main/Main/Game" }), { kinds: ["ML"] }), false); // не в списке рынков
   assert.equal(vp.eligible(sig({ kind: "SCORE", param: "", side: "A", market: "x" }), {}), false); // неумеемый рынок
+  assert.equal(vp.eligible(sig({ kind: "ML", param: "", side: "A", market: "/Main/Main ML", st: "/Main/Main", sportType: 1 }), {}), false); // не теннис (футбол) → не ставим
 });
 
 test("choosePlacement: лучший по value + занятость/суточный лимит/пусто", () => {
