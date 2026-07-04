@@ -23,3 +23,21 @@ test("eventScores: снимок счёта/статуса событий Betano 
 test("eventScores: движок не готов (нет состояния) → пусто", () => {
   assert.deepEqual(new ValueLiveEngine("k").eventScores(), []);
 });
+
+test("_initBook: rate-limit фида — терпеливо ждёт retryAfter и поднимается (не падает как «пусто»)", async () => {
+  const bc = require("../lib/bettingco.cjs");
+  const orig = bc.getBookmakerData;
+  let calls = 0;
+  bc.getBookmakerData = async () => {
+    calls++;
+    if (calls <= 2) return { message: "Rate limit exceeded", retryAfterMilliseconds: 20 }; // сперва rate-limit
+    return { gamesOriginModel: { writeTime: "t", model: { "/g/1": { textId: "/g/1", team1NameEn: "A", team2NameEn: "B" } } }, marketsOriginModel: { model: {} }, snapshots: [] };
+  };
+  try {
+    const eng = new ValueLiveEngine("k", { minPullMs: 5 });
+    eng.lastPull = Date.now() - 10;                 // не ждать стартовый интервал
+    const st = await eng._initBook("Pinnacle");
+    assert.ok(st && st.games["/g/1"], "поднялся после rate-limit");
+    assert.equal(calls, 3);                          // 2 rate-limit + 1 успех; rate-limit не сжёг лимит попыток
+  } finally { bc.getBookmakerData = orig; }
+});
