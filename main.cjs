@@ -1278,6 +1278,11 @@ async function valueEngineTick() {
       lastBet: top ? (top.sport + " · " + top.t1 + " vs " + top.t2 + " · " + top.market + " " + top.side + " +" + (top.value * 100).toFixed(1) + "%") : "" });
     // Ставочная часть на этих же сигналах (флаг valuePlace, по умолчанию ВЫКЛ; реальный клик только при valueLive).
     if (settings.valuePlace && settings.octoMode) tryPlaceFromValueSignals(sigs).catch((e) => logger.log("ERROR", "[value] простановка:", e && e.message));
+    else if (settings.valuePlace && !settings.octoMode && Date.now() - valuePlaceDiagAt > 20000) {
+      // Частый ловец: простановку включили, но НЕ подключились к Octo через приложение (логин снаружи не считается).
+      valuePlaceDiagAt = Date.now();
+      logger.log("WARN", "[value] простановка ВКЛ, но octoMode ВЫКЛ — нажми «Войти (Octo)» в карточке Betano (приложение должно САМО подключиться к профилю Octo, внешний логин не считается)");
+    }
   } catch (e) { logger.log("ERROR", "[value] цикл движка:", e && e.message); sendValuePulse({ error: e && e.message }); }
   finally { valueEngineBusy = false; }
 }
