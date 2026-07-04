@@ -41,3 +41,23 @@ test("_initBook: rate-limit фида — терпеливо ждёт retryAfter 
     assert.equal(calls, 3);                          // 2 rate-limit + 1 успех; rate-limit не сжёг лимит попыток
   } finally { bc.getBookmakerData = orig; }
 });
+
+test("_initBook: пусто(null) и 429(rateLimited по статусу) — ждёт, поднимается, логирует форму", async () => {
+  const bc = require("../lib/bettingco.cjs");
+  const orig = bc.getBookmakerData;
+  let calls = 0; const diag = [];
+  bc.getBookmakerData = async () => {
+    calls++;
+    if (calls === 1) return null;                                     // пусто (204/empty тело)
+    if (calls === 2) return { rateLimited: true, retryAfterMs: 20 };  // 429 распознан по статусу
+    return { gamesOriginModel: { writeTime: "t", model: { "/g/9": { textId: "/g/9", team1NameEn: "C", team2NameEn: "D" } } }, marketsOriginModel: { model: {} }, snapshots: [] };
+  };
+  try {
+    const eng = new ValueLiveEngine("k", { minPullMs: 5, onInitDiag: (b, s) => diag.push(b + ":" + s) });
+    eng.lastPull = Date.now() - 10;
+    const st = await eng._initBook("Pinnacle");
+    assert.ok(st && st.games["/g/9"]);
+    assert.equal(calls, 3);
+    assert.ok(diag.some((d) => d.includes("пусто")) && diag.some((d) => d.includes("429")), "форма залогирована: " + diag.join(" | "));
+  } finally { bc.getBookmakerData = orig; }
+});

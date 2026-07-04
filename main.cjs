@@ -1177,7 +1177,7 @@ let valuePulseState = { on: false }; // статус value для шапки п�
 
 // ── Движок LIVE-value на фиде bettingco (Betano+Pinnacle синхронно, снимки ~1с). ТОЛЬКО ДЕТЕКЦИЯ ──
 // Простановка через Octo — отдельная фаза; здесь движок держит сессии, сканит и толкает сигналы в панель.
-let valueEngine = null, valueEngineTimer = null, valueEngineBusy = false, valueEngineStarting = false, valueAutosaveTimer = null;
+let valueEngine = null, valueEngineTimer = null, valueEngineBusy = false, valueEngineStarting = false, valueAutosaveTimer = null, valueEngineNextTry = 0;
 let valuePlaceBusy = false, valuePlaceCount = 0, valuePlaceDay = "", valuePlaceDiagAt = 0; // состояние ставочной части (busy/лимит/день/диаг)
 const valuePlacedKeys = new Set(); // исходы, уже пробованные на ставку в этой сессии (дедуп, без спама Octo)
 let sessionStart = 0;
@@ -1195,7 +1195,7 @@ async function startValueEngine() {
   valueEngineStarting = true;
   sendValuePulse({ on: true, live: !!settings.valueLive, scanning: true, error: "", note: "инициализация bettingco…" });
   try {
-    const eng = new ValueLiveEngine(settings.bettingcoKey, {});
+    const eng = new ValueLiveEngine(settings.bettingcoKey, { onInitDiag: (bk, shape, n) => logger.log("WARN", "[value] " + bk + " init ждёт (" + shape + "), попытка " + n) });
     await eng.init();
     valueEngine = eng;
     sessionStart = Date.now(); sessionSignals.clear(); sessionEvents.clear(); valuePlacedKeys.clear(); valuePlaceCount = 0; // новая сессия
@@ -1206,7 +1206,9 @@ async function startValueEngine() {
     // Автосейв сессии каждые 2 мин (crash-safety на многодневный сбор): перезаписывает ТОТ ЖЕ файл (имя от sessionStart).
     valueAutosaveTimer = setInterval(() => { try { flushSessionStats(); } catch (e) { logger.log("WARN", "[value] автосейв:", e && e.message); } }, 120000);
   } catch (e) {
-    logger.log("ERROR", "[value] движок bettingco не поднялся:", e && e.message);
+    // Не подняли (лимит/фид) — НЕ ERROR-спам: WARN + backoff 45с, чтобы авто-ретраи не долбили ключ (долбёж сам держит лимит).
+    valueEngineNextTry = Date.now() + 45000;
+    logger.log("WARN", "[value] движок bettingco не поднялся (" + (e && e.message) + ") — авто-повтор через 45с");
     sendValuePulse({ scanning: false, error: "bettingco: " + (e && e.message) });
   } finally { valueEngineStarting = false; }
 }
@@ -1215,7 +1217,7 @@ function stopValueEngine() {
   if (valueEngineTimer) { clearInterval(valueEngineTimer); valueEngineTimer = null; }
   if (valueAutosaveTimer) { clearInterval(valueAutosaveTimer); valueAutosaveTimer = null; }
   flushSessionStats();  // одна сессия = один файл: сохраняем при закрытии
-  valueEngine = null; sessionSignals.clear(); sessionEvents.clear();
+  valueEngine = null; sessionSignals.clear(); sessionEvents.clear(); valueEngineNextTry = 0; // сброс backoff: ручной старт — сразу
 }
 
 // Будущая простановка вызовет это, чтобы отметить валуй проставленным (сейчас не вызывается → placed=0).
@@ -1721,7 +1723,7 @@ async function watchdog(text) {
 async function tick() {
   // ── LIVE-value (bettingco): движок крутится на своём таймере (startValueEngine, ~1с). Тут — страховка
   // старта/остановки по настройкам (valueMode + ключ Betano-фида). Старый oddspapi/ps3838-путь отключён. ──
-  if (settings.valueMode && settings.bettingcoKey) { if (!valueEngine && !valueEngineStarting) startValueEngine().catch(() => {}); }
+  if (settings.valueMode && settings.bettingcoKey) { if (!valueEngine && !valueEngineStarting && Date.now() > valueEngineNextTry) startValueEngine().catch(() => {}); }
   else { if (valueEngine || valueEngineTimer || valueEngineStarting) stopValueEngine(); if (!valueBusy) sendValuePulse({ on: false }); }
   // ── surebet-фид (legacy): окно surebet больше не создаётся → блок ниже не выполняется ──
   if (!running || !surebetWin || surebetWin.isDestroyed()) return;
