@@ -1179,6 +1179,7 @@ let valuePulseState = { on: false }; // статус value для шапки п�
 // Простановка через Octo — отдельная фаза; здесь движок держит сессии, сканит и толкает сигналы в панель.
 let valueEngine = null, valueEngineTimer = null, valueEngineBusy = false, valueEngineStarting = false, valueAutosaveTimer = null, valueEngineNextTry = 0;
 let valuePlaceBusy = false, valuePlaceCount = 0, valuePlaceDay = "", valuePlaceDiagAt = 0; // состояние ставочной части (busy/лимит/день/диаг)
+let valueRun = false; // сессия value запущена ПОЛЬЗОВАТЕЛЕМ (кнопкой value-run), НЕ тумблером — движок стартует только при этом
 const valuePlacedKeys = new Set(); // исходы, уже пробованные на ставку в этой сессии (дедуп, без спама Octo)
 let sessionStart = 0;
 // ВСЯ сессия (НЕ чистим до её закрытия): key → {sport,sportType,t1,t2,market,side,maxValue,first,last,count,placed,betanoOdds}.
@@ -1190,7 +1191,7 @@ const sessionEvents = new Map();
 
 async function startValueEngine() {
   // Условие работы: включён value + задан ключ Betano-фида. Иначе — остановить.
-  if (!settings.valueMode || !settings.bettingcoKey) { stopValueEngine(); return; }
+  if (!valueRun || !settings.bettingcoKey) { stopValueEngine(); return; } // старт — только по кнопке (valueRun) + есть ключ
   if (valueEngine || valueEngineStarting) return; // уже поднят/поднимается
   valueEngineStarting = true;
   sendValuePulse({ on: true, live: !!settings.valueLive, scanning: true, error: "", note: "инициализация bettingco…" });
@@ -1729,7 +1730,7 @@ async function watchdog(text) {
 async function tick() {
   // ── LIVE-value (bettingco): движок крутится на своём таймере (startValueEngine, ~1с). Тут — страховка
   // старта/остановки по настройкам (valueMode + ключ Betano-фида). Старый oddspapi/ps3838-путь отключён. ──
-  if (settings.valueMode && settings.bettingcoKey) { if (!valueEngine && !valueEngineStarting && Date.now() > valueEngineNextTry) startValueEngine().catch(() => {}); }
+  if (valueRun && settings.bettingcoKey) { if (!valueEngine && !valueEngineStarting && Date.now() > valueEngineNextTry) startValueEngine().catch(() => {}); }
   else { if (valueEngine || valueEngineTimer || valueEngineStarting) stopValueEngine(); if (!valueBusy) sendValuePulse({ on: false }); }
   // ── surebet-фид (legacy): окно surebet больше не создаётся → блок ниже не выполняется ──
   if (!running || !surebetWin || surebetWin.isDestroyed()) return;
@@ -1901,8 +1902,8 @@ function startLoop() {
   timer = setInterval(() => { tick().catch((e) => { status.lastError = e.message; logger.log("ERROR", "tick:", e); }); }, Math.max(3000, settings.pollMs || 8000));
   if (keepAliveTimer) clearInterval(keepAliveTimer);
   keepAliveTimer = setInterval(() => { keepBookersAlive().catch(() => {}); keepOctoAlive().catch(() => {}); }, 45000);
-  // LIVE-value движок: перезапустить под текущие настройки (ключ/тумблер могли поменяться при сохранении).
-  stopValueEngine(); startValueEngine().catch((e) => logger.log("ERROR", "startValueEngine:", e && e.message));
+  // LIVE-value движок здесь НЕ трогаем: сессия запускается/останавливается ОТДЕЛЬНОЙ кнопкой (value-run),
+  // сохранение конфига её не рестартит. Если сессия идёт (valueRun) и движок упал — tick поднимет его сам.
 }
 
 // ── авто-обновление ───────────────────────────────────────────────────────────
@@ -1966,6 +1967,15 @@ ipcMain.handle("save-settings", (_e, patch) => {
   pushStatus();
   return maskedSettings();
 });
+// Запуск/остановка value-сессии ОТДЕЛЬНОЙ кнопкой (не тумблером): конфиг выставляешь спокойно, потом «Запустить».
+ipcMain.handle("value-run", (_e, on) => {
+  valueRun = !!on;
+  if (valueRun) { valueEngineNextTry = 0; startValueEngine().catch((e) => logger.log("ERROR", "startValueEngine:", e && e.message)); }
+  else stopValueEngine();
+  pushStatus();
+  return valueRun;
+});
+ipcMain.handle("value-run-state", () => valueRun);
 ipcMain.handle("open-surebet", () => { if (surebetWin) { surebetWin.show(); surebetWin.focus(); } });
 // Список лиг спорта из oddspapi (для пикера в панели): только с ближайшими/будущими матчами, по убыванию.
 const _tnCache = new Map(); // sportId → {list, ts} (кэш 1ч, чтобы не дёргать API на каждый открыв панели)

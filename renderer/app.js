@@ -21,7 +21,6 @@ function renderStatus(s) {
     $("valueOddsMax").value = v.valueOddsMax || "";
     if (v.valueStake) $("valueStake").value = v.valueStake;
     $("valueMaxPerDay").value = v.valueMaxPerDay != null ? v.valueMaxPerDay : 20;
-    $("valueMode").checked = !!v.valueMode;
     $("valueLive").checked = !!v.valueLive;
     if ($("valuePlace")) $("valuePlace").checked = !!v.valuePlace;
     if ($("valuePlaceRequireArb")) $("valuePlaceRequireArb").checked = !!v.valuePlaceRequireArb;
@@ -159,7 +158,6 @@ function saveValue() {
     valueMaxPerDay: Number($("valueMaxPerDay").value) || 0,
     valueOddsMin: Number($("valueOddsMin").value) || 0,
     valueOddsMax: Number($("valueOddsMax").value) || 0,
-    valueMode: $("valueMode").checked,
     valueLive: $("valueLive").checked,
     valuePlace: $("valuePlace") ? $("valuePlace").checked : false,
     valuePlaceRequireArb: $("valuePlaceRequireArb") ? $("valuePlaceRequireArb").checked : false,
@@ -174,12 +172,27 @@ if ($("valueSave")) $("valueSave").onclick = async () => {
   try { await saveValue(); $("valueResult").textContent = "✅ сохранено"; }
   catch (e) { $("valueResult").textContent = "⚠️ " + e.message; }
 };
-// тумблеры value сохраняем сразу (движок подхватит на следующем тике)
-if ($("valueMode")) $("valueMode").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valueMode").checked ? "🎯 value-режим ВКЛ" : "value-режим выкл"; }).catch((e) => { $("valueResult").textContent = "⚠️ " + e.message; });
-if ($("valueLive")) $("valueLive").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valueLive").checked ? "⚡ боевой ВКЛ" : "dry-run"; }).catch(() => {});
+// тумблеры value — это КОНФИГ: сохраняем сразу, но движок НЕ трогаем (сессия — отдельной кнопкой ниже).
+if ($("valueLive")) $("valueLive").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valueLive").checked ? "⚡ боевой ВКЛ (применится к идущей сессии)" : "dry-run"; }).catch(() => {});
 if ($("valuePlace")) $("valuePlace").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valuePlace").checked ? "🅱️ простановка ВКЛ" : "простановка выкл"; }).catch(() => {});
 if ($("valuePlaceRequireArb")) $("valuePlaceRequireArb").onchange = () => saveValue().catch(() => {});
 if ($("valuePlaceMlOnly")) $("valuePlaceMlOnly").onchange = () => saveValue().catch(() => {});
+
+// Старт/стоп value-сессии — ОТДЕЛЬНАЯ кнопка (тумблеры её не запускают). Перед стартом сохраняем конфиг.
+let valueSessionOn = false;
+function setRunBtn(on) {
+  valueSessionOn = !!on;
+  const b = $("valueRunBtn"); if (b) b.textContent = on ? "⏹ Остановить сессию" : "▶ Запустить сессию";
+}
+if ($("valueRunBtn")) $("valueRunBtn").onclick = async () => {
+  const b = $("valueRunBtn"); if (b) b.disabled = true;
+  try {
+    if (!valueSessionOn) { await saveValue(); setRunBtn(await window.api.runValueSession(true)); $("valueResult").textContent = "▶ сессия запущена"; }
+    else { setRunBtn(await window.api.runValueSession(false)); $("valueResult").textContent = "⏹ сессия остановлена"; }
+  } catch (e) { $("valueResult").textContent = "⚠️ " + e.message; }
+  finally { if (b) b.disabled = false; }
+};
+if (window.api.valueRunState) window.api.valueRunState().then((on) => setRunBtn(on)).catch(() => {});
 
 // ── конторы (антидетект-профили) ──────────────────────────────────────────────
 let bookersCache = [];

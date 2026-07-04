@@ -4,6 +4,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("api", {
   getStatus: () => ipcRenderer.invoke("get-status"),
   saveSettings: (patch) => ipcRenderer.invoke("save-settings", patch),
+  runValueSession: (on) => ipcRenderer.invoke("value-run", on), // старт/стоп value-сессии отдельной кнопкой
+  valueRunState: () => ipcRenderer.invoke("value-run-state"),
   openSurebet: () => ipcRenderer.invoke("open-surebet"),
   setRunning: (v) => ipcRenderer.invoke("set-running", v),
   testTelegram: () => ipcRenderer.invoke("test-telegram"),
