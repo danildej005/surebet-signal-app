@@ -1441,7 +1441,7 @@ async function runValueCycle(c, live) {
   if (!onEvent) return { ok: false, error: "событие betano.bg не открылось" };
   const r = await placeBet("betano", c.stake, live);
   // Очистить купон после НЕзавершённой ставки (dry-run или не прошло) — не оставлять выбор висеть до следующей попытки.
-  if (!r.placed) { try { const bw = bookerWin("betano"); if (bw && !bw.isDestroyed() && BETSLIP.betano) await clearBetslip(bw, BETSLIP.betano); } catch { /* ignore */ } }
+  if (!r.placed) { try { const bw = bookerWin("betano"); if (bw && !bw.isDestroyed() && BETSLIP.betano) { await clearBetslip(bw, BETSLIP.betano); logger.log("INFO", "[value] купон очищен после " + (live ? "неудачной ставки" : "dry-run")); } } catch { /* ignore */ } }
   return { ...r, candidate: c };
 }
 
