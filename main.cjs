@@ -1201,6 +1201,12 @@ async function startValueEngine() {
     sessionStart = Date.now(); sessionSignals.clear(); sessionEvents.clear(); valuePlacedKeys.clear(); valuePlaceCount = 0; // новая сессия
     const c = eng.counts();
     logger.log("INFO", "[value] движок bettingco поднят: Betano игр " + c.games + " | Pinnacle игр " + c.pinGames);
+    // Конфиг запуска в лог — чтобы сразу видеть, что реально включено (частый ловец: valuePlace off / octoMode off / стейк=0).
+    logger.log("INFO", "[value] КОНФИГ: простановка=" + (settings.valuePlace ? "ВКЛ" : "выкл") + " · octoMode=" + (settings.octoMode ? "ВКЛ" : "выкл") +
+      " · режим=" + (settings.valueLive ? "БОЕВОЙ" : "dry-run") + " · стейк=" + (Number(settings.valueStake) || 0) +
+      " · порог=" + ((Number(settings.valueThreshold) || 0) * 100).toFixed(1) + "%" +
+      " · рынки=" + ((settings.valuePlaceKinds && settings.valuePlaceKinds.length) ? settings.valuePlaceKinds.join(",") : "все") +
+      " · только-вилки=" + (settings.valuePlaceRequireArb ? "да" : "нет") + " · лимит/сут=" + (Number(settings.valueMaxPerDay) || 0));
     sendValuePulse({ scanning: false, note: "", matched: null });
     valueEngineTimer = setInterval(() => { valueEngineTick().catch((e) => logger.log("ERROR", "value-engine:", e && e.message)); }, 1500);
     // Автосейв сессии каждые 2 мин (crash-safety на многодневный сбор): перезаписывает ТОТ ЖЕ файл (имя от sessionStart).
@@ -1871,19 +1877,19 @@ async function keepBookersAlive() {
 // продлевает сессию. Скип, если идёт ставка (valueBusy/botBusy) или вкладка в фокусе (юзер сам работает).
 let keepOctoRunning = false;
 async function keepOctoAlive() {
-  if (keepOctoRunning || botBusy || valueBusy || !settings.keepAlive) return;
+  // valuePlaceBusy — чтобы НЕ перезагрузить страницу во время простановки (иначе собьём ставку).
+  if (keepOctoRunning || botBusy || valueBusy || valuePlaceBusy || !settings.keepAlive) return;
   keepOctoRunning = true;
   try {
     for (const [id, win] of octoWins) {
-      if (botBusy || valueBusy) break;
+      if (botBusy || valueBusy || valuePlaceBusy) break;
       if (!win || win.isDestroyed()) { octoWins.delete(id); continue; }
-      let focused = false;
-      try { focused = await win.webContents.executeJavaScript("document.hasFocus()"); } catch { /* ignore */ }
-      if (focused) continue; // юзер сам в окне Octo — не дёргаем
+      // Скип по document.hasFocus() УБРАН: на ВДС окно Octo почти всегда «в фокусе» → анти-разлогин не срабатывал
+      // и Betano выкидывал по бездействию. Держим сессию всегда; для ручного логина есть тумблер keepAlive.
       let before = ""; try { before = win.webContents.getURL(); } catch { /* ignore */ }
       try { if (win.page && win.page.mouse) await win.page.mouse.move(6 + Math.random() * 14, 6 + Math.random() * 14); } catch { /* ignore */ }
       await sleep(800);
-      if (botBusy || valueBusy || win.isDestroyed()) continue;
+      if (botBusy || valueBusy || valuePlaceBusy || win.isDestroyed()) continue;
       if (before && /^https?:/i.test(before)) { try { await win.loadURL(before); } catch { /* ignore */ } }
       logger.log("INFO", "анти-разлогин Octo:", id, "активность + обновление");
     }
