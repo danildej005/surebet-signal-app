@@ -505,3 +505,20 @@ test("Betano фора-сеты: сторона A (team1) — НЕ берём ф�
   const r = pickOutcome({ desc: "AH1(-1.5)", expectedOdds: 2.92, buttons: withScore, eventUrl: URL, unit: "set", subject: "Calvin Hemery" });
   assert.ok(r && /2\s*-\s*0/.test(r.text), "должен выбрать счёт 2-0, а не Marvin -1.5; выбрал: " + (r && r.text));
 });
+
+test("Betano гейм-фора БЕЗ имени: явный фаворит → берём «-X» его стороны; неявный фаворит → отказ", () => {
+  const URL = "https://www.betano.bg/en/match-odds/vladyslav-orlov-stefan-popovic/999/"; // player1 = Orlov
+  // Явный фаворит Orlov (1.26 vs 3.35): наш AH1(-3.5) сторона 1 = Orlov → берём «-3.5»
+  const clear = withIndex([
+    { text: "Vladyslav Orlov 1.26" }, { text: "Stefan Popovic 3.35" },
+    { text: "-3.5 1.55" }, { text: "+3.5 2.05" },
+  ]);
+  const r = pickOutcome({ desc: "AH1(-3.5)", expectedOdds: 1.55, buttons: clear, eventUrl: URL, unit: "game", subject: "Vladyslav Orlov" });
+  assert.ok(r && /-3\.5/.test(r.text), "должен взять -3.5 фаворита; взял: " + (r && r.text));
+  // Близкий матч (1.85 vs 1.95) → фаворит НЕ явный → отказ (не гадаем сторону)
+  const close = withIndex([
+    { text: "Vladyslav Orlov 1.85" }, { text: "Stefan Popovic 1.95" },
+    { text: "-3.5 1.55" }, { text: "+3.5 2.05" },
+  ]);
+  assert.strictEqual(pickOutcome({ desc: "AH1(-3.5)", expectedOdds: 1.55, buttons: close, eventUrl: URL, unit: "game", subject: "Vladyslav Orlov" }), null);
+});
