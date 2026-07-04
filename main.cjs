@@ -1320,8 +1320,10 @@ async function tryPlaceFromValueSignals(sigs) {
   try {
     const res = await runValueCycle(c, live);
     valuePlacedKeys.add(c.key); // пробовали — не долбим этот исход каждый тик (успех/неудача не важно)
-    if (res && res.placed) { valuePlaceCount++; markValuePlaced(c.key); logger.log("INFO", "[value] ✅ ПОСТАВЛЕНО: " + (res.selected || c.desc) + " @" + (res.selectedOdds || c.expectedOdds)); }
-    else if (res && res.selected) logger.log("INFO", "[value] dry-run: выбрал «" + res.selected + "» @" + (res.selectedOdds || "?") + (res.error ? " | " + res.error : ""));
+    // Пометка способа выбора (для отдельной статы): how=name/desc/id/fav; fav = БЕЗЫМЯННАЯ фора, привязана по фавориту.
+    const howTag = res && res.how ? " [how=" + res.how + (res.how === "fav" ? " #безымянная-фора(по фавориту)" : "") + "]" : "";
+    if (res && res.placed) { valuePlaceCount++; markValuePlaced(c.key); logger.log("INFO", "[value] ✅ ПОСТАВЛЕНО: " + (res.selected || c.desc) + " @" + (res.selectedOdds || c.expectedOdds) + howTag); }
+    else if (res && res.selected) logger.log("INFO", "[value] dry-run: выбрал «" + res.selected + "» @" + (res.selectedOdds || "?") + howTag + (res.error ? " | " + res.error : ""));
     else logger.log("WARN", "[value] простановка не прошла: " + ((res && res.error) || "исход не выбран"));
   } catch (e) { logger.log("ERROR", "[value] простановка:", e && e.message); }
   finally { valuePlaceBusy = false; }

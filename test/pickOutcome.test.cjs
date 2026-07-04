@@ -515,6 +515,7 @@ test("Betano гейм-фора БЕЗ имени: явный фаворит → 
   ]);
   const r = pickOutcome({ desc: "AH1(-3.5)", expectedOdds: 1.55, buttons: clear, eventUrl: URL, unit: "game", subject: "Vladyslav Orlov" });
   assert.ok(r && /-3\.5/.test(r.text), "должен взять -3.5 фаворита; взял: " + (r && r.text));
+  assert.equal(r.how, "fav"); // помечено как безымянная-фора по фавориту (для отдельной статы в логах)
   // Близкий матч (1.85 vs 1.95) → фаворит НЕ явный → отказ (не гадаем сторону)
   const close = withIndex([
     { text: "Vladyslav Orlov 1.85" }, { text: "Stefan Popovic 1.95" },
