@@ -57,7 +57,17 @@ test("eligible: фильтры (ссылка, порог value, коридор �
   assert.equal(vp.eligible(sig({ ...base, arbPct: 0.03 }), { requireArb: true }), true);       // вилка
   assert.equal(vp.eligible(sig({ ...base, kind: "TOTAL", param: "27.5", st: "/Main/Main/Game" }), { kinds: ["ML"] }), false); // не в списке рынков
   assert.equal(vp.eligible(sig({ kind: "SCORE", param: "", side: "A", market: "x" }), {}), false); // неумеемый рынок
-  assert.equal(vp.eligible(sig({ kind: "ML", param: "", side: "A", market: "/Main/Main ML", st: "/Main/Main", sportType: 1 }), {}), false); // не теннис (футбол) → не ставим
+  assert.equal(vp.eligible(sig({ kind: "ML", param: "", side: "A", market: "/Main/Main ML", st: "/Main/Main", sportType: 1 }), {}), true); // не-теннис (футбол) теперь ставим — desc «1»/«2» универсален
+});
+
+test("betDesc: НЕ-теннис — без единицы сеты/геймы (голы/очки — один рынок, единица мешала бы pickOutcome)", () => {
+  const sp = vp.betDesc(sig({ kind: "SPREAD", param: "-1.5", side: "A", st: "/Main/Main", sportType: 1 })); // футбольная фора (голы)
+  assert.equal(sp.desc, "AH1(-1.5)"); assert.equal(sp.subject, "Guido Ivan Justo"); assert.equal(sp.unit, null);
+  const to = vp.betDesc(sig({ kind: "TOTAL", param: "2.5", side: "A", st: "/Main/Main", sportType: 1 }));
+  assert.equal(to.desc, "Over 2.5"); assert.equal(to.unit, null);
+  const c = vp.signalToCandidate(sig({ kind: "SPREAD", param: "-1.5", side: "A", st: "/Main/Main", sportType: 1, market: "/Main/Main SPREAD -1.5" }), 5);
+  assert.equal(c.descFull, "AH1(-1.5) Guido Ivan Justo");        // без «- сеты» → pickOutcome не включит set→счёт-конвертацию
+  assert.equal(bk.marketUnit(c.descFull), null);
 });
 
 test("choosePlacement: лучший по value + занятость/суточный лимит/пусто", () => {

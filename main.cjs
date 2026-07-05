@@ -1208,7 +1208,7 @@ async function startValueEngine() {
       " · порог=" + ((Number(settings.valueThreshold) || 0) * 100).toFixed(1) + "%" +
       " · рынки=" + ((settings.valuePlaceKinds && settings.valuePlaceKinds.length) ? settings.valuePlaceKinds.join(",") : "все") +
       " · только-вилки=" + (settings.valuePlaceRequireArb ? "да" : "нет") + " · лимит/сут=" + (Number(settings.valueMaxPerDay) || 0) +
-      " · доп матч/маркет/дубли=" + (Number(settings.valuePlaceEventExtra) || 0) + "/" + (Number(settings.valuePlaceMarketExtra) || 0) + "/" + (Number(settings.valuePlaceDupExtra) || 0) + " · спорт=только теннис");
+      " · доп матч/маркет/дубли=" + (Number(settings.valuePlaceEventExtra) || 0) + "/" + (Number(settings.valuePlaceMarketExtra) || 0) + "/" + (Number(settings.valuePlaceDupExtra) || 0) + " · спорт=все (ML 3-way с ничьёй отсеивается)");
     sendValuePulse({ scanning: false, note: "", matched: null });
     valueEngineTimer = setInterval(() => { valueEngineTick().catch((e) => logger.log("ERROR", "value-engine:", e && e.message)); }, 1500);
     // Автосейв сессии каждые 2 мин (crash-safety на многодневный сбор): перезаписывает ТОТ ЖЕ файл (имя от sessionStart).

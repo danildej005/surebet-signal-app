@@ -86,6 +86,25 @@ test("valueForEvent: реальный value проходит, артефакт (
   assert.equal(bc.valueForEvent(B2, P, "A", "B", { threshold: 0.02, maxPlausible: 0.25 }).length, 0);
 });
 
+test("3-way (1X2 с ничьёй): ML отсеивается — de-vig 2-way завышает fair для 3 исходов", () => {
+  // Pinnacle: MONEYLINE с 3-м слотом (ничья, слот ≠ TEAM1/TEAM2) → ML-ключ помечен draw
+  const P = [
+    { surebetTextId: "/Main/Main", meta: "1|0|MONEYLINE|TEAM1||0|3", marketValue: 2.0, marketParameter: 0 },
+    { surebetTextId: "/Main/Main", meta: "1|0|MONEYLINE|DRAW||0|3", marketValue: 3.4, marketParameter: 0 },
+    { surebetTextId: "/Main/Main", meta: "1|0|MONEYLINE|TEAM2||0|3", marketValue: 4.0, marketParameter: 0 },
+  ];
+  assert.equal(bc.pinnacleOutcomes(P)["/Main/Main|ML|"].draw, true);
+  // Betano: «Winner | Draw» (3-й исход) → тоже помечает draw
+  const B = [
+    { surebetTextId: "/Main/Main", meta: "Winner | A", marketValue: 2.2 },
+    { surebetTextId: "/Main/Main", meta: "Winner | Draw", marketValue: 3.3 },
+    { surebetTextId: "/Main/Main", meta: "Winner | B", marketValue: 3.9 },
+  ];
+  assert.equal(bc.betanoOutcomes(B, "A", "B")["/Main/Main|ML|"].draw, true);
+  // несмотря на «перекос» 2.2(Betano) vs 2.0(Pinnacle), ML-сигнала НЕТ — рынок 3-way пропущен
+  assert.equal(bc.valueForEvent(B, P, "A", "B", { threshold: -1, maxPlausible: 99, marginMax: 99 }).filter((s) => s.kind === "ML").length, 0);
+});
+
 test("sportName: sportType → название (для статистики)", () => {
   assert.equal(bc.sportName(3), "Теннис");
   assert.equal(bc.sportName(9), "Бейсбол");
