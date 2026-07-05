@@ -12,7 +12,7 @@ const { formatSignal } = require("./lib/format.cjs");
 const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
-const { defaultBookers, emptyProxy, buildProxyString, betanoTarget, localizeBetanoUrl, betanoCategoryFor, sameSideSelected, randomFingerprint, randomUA, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
+const { defaultBookers, emptyProxy, buildProxyString, betanoTarget, localizeBetanoUrl, betanoCategoryFor, sameSideSelected, randomFingerprint, randomUA, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, verifyPick, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 const fx = require("./lib/fx.cjs");
 const { parseMoney, vilkaStakes } = require("./lib/vilka.cjs");
@@ -552,30 +552,37 @@ async function readBookmakerBalance(win, id) {
 // «List of Vendors»/«Allow All» в логе). Владелец явно разрешил жать вместо него. Приоритет:
 // сперва «только необходимые/Reject» (приватнее и тоже убирает оверлей), иначе «принять все».
 const CONSENT_JS = `(() => {
-  const REJECT = /^(reject all|reject|decline|necessary only|only necessary|rejeitar( tudo)?|apenas (as )?necess[aá]ri\\w*|recusar)$/i;
-  const ACCEPT = /^(allow all|accept all|accept|permitir todos|aceitar( tudo)?|concordo|i agree|agree|ok|got it|entendi|aceito|continuar)$/i;
-  // ВНЕ консент-контейнера жмём ТОЛЬКО однозначные фразы (чтобы не нажать обычную «OK»/«Continuar»)
-  const STRICT = /^(allow all|accept all|reject all|permitir todos|aceitar tudo|rejeitar tudo)$/i;
-  const inConsent = (el) => !!el.closest('[id*="onetrust" i],[class*="onetrust" i],[id*="consent" i],[class*="consent" i],[id*="cookie" i],[class*="cookie" i],[class*="didomi" i],[id*="sp_message" i],[class*="cmp" i],[class*="gdpr" i],[class*="qc-cmp" i]');
-  // ВИДИМОСТЬ через rect, а НЕ offsetParent: cookie-оверлеи это position:fixed → offsetParent=null,
-  // и старый фильтр выбрасывал саму кнопку «Allow All». Теперь ловим её.
-  const vis = (x) => { try { const r = x.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch (_) { return false; } };
-  const btns = [...document.querySelectorAll('button,[role=button],a')].filter(vis);
   // Чистим НЕВИДИМЫЕ bidi/zero-width символы (U+200B..200F, 202A..202E, FEFF): у Betano в подписях
   // консент-кнопок встречается U+200E («List of Vendors‎») → строгое ^reject all$ не срабатывало.
-  const txt = (x) => (x.innerText || '').replace(/[\\u200b-\\u200f\\u202a-\\u202e\\ufeff]/g, '').replace(/\\s+/g, ' ').trim();
-  // в консент-контейнере: reject → accept; вне контейнера — только однозначные STRICT-фразы
-  let b = btns.find((x) => REJECT.test(txt(x)) && inConsent(x))
-       || btns.find((x) => ACCEPT.test(txt(x)) && inConsent(x))
-       || btns.find((x) => STRICT.test(txt(x)));
-  if (b) { b.click(); return txt(b); }
-  return null;
+  const clean = (s) => (s || '').replace(/[\\u200b-\\u200f\\u202a-\\u202e\\ufeff]/g, '').replace(/\\s+/g, ' ').trim();
+  const REJECT = /^(reject all|reject|decline|necessary only|only necessary|rejeitar( tudo)?|apenas (as )?necess[aá]ri\\w*|recusar)$/i;
+  const STRICT = /^(allow all|accept all|reject all|permitir todos|aceitar tudo|rejeitar tudo)$/i;
+  const ACCEPT = /^(allow all|accept all|accept|permitir todos|aceitar( tudo)?|concordo|i agree|agree|ok|got it|entendi|aceito)$/i;
+  const CONFIRM = /^(confirm my choices|save (&|and) exit|save choices|guardar( sele[cç][aã]o)?|salvar)$/i;
+  const CONSENTISH = /(consent|cookie|vendor|privacy|gdpr|tcf|didomi|onetrust)/i;
+  const vis = (x) => { try { const r = x.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch (_) { return false; } };
+  // ВКЛЮЧАЕМ div/span: некоторые CMP рисуют «кнопки» дивами. Безопасно, т.к. жмём по ТОЧНОМУ тексту (reject all/allow all).
+  const els = [...document.querySelectorAll('button,[role=button],a,div,span')].filter((x) => vis(x) && clean(x.innerText).length <= 40);
+  const pick = (re) => els.find((x) => re.test(clean(x.innerText)));
+  // приоритет: «Reject All» → строгие allow/reject all → любой reject → accept
+  let b = pick(/^reject all$/i) || pick(STRICT) || pick(REJECT) || pick(ACCEPT);
+  let clicked = null;
+  if (b) {
+    b.click(); clicked = clean(b.innerText);
+    // многошаговый TCF-CMP: после выбора может понадобиться «Confirm My Choices»
+    const conf = els.find((x) => x !== b && CONFIRM.test(clean(x.innerText)));
+    if (conf) { conf.click(); clicked += ' + ' + clean(conf.innerText); }
+  }
+  // диагностика: если НЕ кликнули — что похожее на консент видели (тег + скрытость), чтобы понять почему
+  const saw = clicked ? [] : els.filter((x) => STRICT.test(clean(x.innerText)) || REJECT.test(clean(x.innerText)) || CONFIRM.test(clean(x.innerText)) || CONSENTISH.test(clean(x.innerText))).slice(0, 8).map((x) => clean(x.innerText) + '<' + x.tagName.toLowerCase() + '>');
+  return { clicked, saw };
 })()`;
 async function dismissConsent(win) {
   if (!win || win.isDestroyed()) return false;
   try {
-    const clicked = await win.webContents.executeJavaScript(CONSENT_JS);
-    if (clicked) { logger.log("INFO", "  cookie-согласие закрыто кнопкой:", clicked); await sleep(900); return true; }
+    const r = await win.webContents.executeJavaScript(CONSENT_JS);
+    if (r && r.clicked) { logger.log("INFO", "  cookie-согласие: клик", r.clicked); await sleep(900); return true; }
+    if (r && r.saw && r.saw.length) logger.log("WARN", "  cookie-оверлей: НЕ кликнул, видел кандидатов:", JSON.stringify(r.saw));
   } catch (e) { logger.log("WARN", "dismissConsent:", e.message); }
   return false;
 }
@@ -706,6 +713,18 @@ async function selectLegOutcome(id) {
       if (!clicked) return { ok: false, win, cfg, bet, selected, selectedOdds, how, error: "кнопка исхода не кликнулась (i=" + choice.i + ")" };
     } catch (e) { return { ok: false, win, cfg, bet, selected, selectedOdds, how, error: "клик исхода: " + e.message }; }
     await sleep(800);
+    // Убедиться, что исход ПОПАЛ в купон (появилось поле суммы). Если нет — cookie/TCF-оверлей мог перехватить/сбросить
+    // выбор: снимаем согласие и кликаем исход ЕЩЁ раз (частый кейс свежей страницы события). До 2 попыток.
+    if (cfg.stake) {
+      for (let att = 0; att < 2 && !win.isDestroyed(); att++) {
+        let inSlip = true;
+        try { inSlip = await win.webContents.executeJavaScript(`!!document.querySelector(${JSON.stringify(cfg.stake)})`); } catch { /* ignore */ }
+        if (inSlip) break;
+        await dismissConsent(win);
+        try { await win.webContents.executeJavaScript(`(() => { const els = [...document.querySelectorAll(${JSON.stringify(sel)})]; const el = els[${Number(choice.i)}]; if (el) { el.click(); return true; } return false; })()`); } catch { /* ignore */ }
+        await sleep(900);
+      }
+    }
   }
   if (cfg.outcomeSel) await dismissConsent(win); // оверлей мог всплыть к моменту чтения макса — закрыть
   const maxStake = cfg.outcomeSel ? await readBookmakerMax(win, id) : null;
@@ -844,7 +863,15 @@ async function placeBet(id, stake, live = false) {
   const r = { ...f, selected: s.selected, selectedOdds: s.selectedOdds, how: s.how, maxStake: s.maxStake, expectedOdds: s.expectedOdds, oddsOk: s.oddsOk, selectedIndex: s.selectedIndex };
   if (r.error) { r.ok = false; logger.log("WARN", "dry-run/place", id, JSON.stringify(r)); return r; }
   r.placed = false;
-  if (live && r.hasPlaceBtn && s.oddsOk !== false) { await clickPlace(s.win, s.cfg); r.placed = true; }
+  // НЕЗАВИСИМЫЙ СУДЬЯ: сверить ВЫБОР с СИГНАЛОМ (тип/линия/сторона/кэф, без экспрессов). Не совпало → в боевом
+  // НЕ ставим и пишем причину; в dry-run логируем вердикт (видно, что судья работает, до боевого). skip = нечем сверять.
+  const bet = s.bet || {};
+  const verdict = verifyPick({ kind: bet.kind, side: bet.side, param: bet.param, st: bet.st, expectedOdds: bet.expectedOdds, t1: bet.t1, t2: bet.t2 }, { text: r.selected, odds: r.selectedOdds, how: r.how });
+  r.verified = verdict.ok;
+  if (!verdict.ok) { r.verifyReason = verdict.reason; logger.log("WARN", "  [судья] ВЫБОР ≠ СИГНАЛ: " + verdict.reason); }
+  else if (!verdict.skip) logger.log("INFO", "  [судья] выбор совпал с сигналом ✓");
+  if (live && r.hasPlaceBtn && s.oddsOk !== false && verdict.ok) { await clickPlace(s.win, s.cfg); r.placed = true; }
+  else if (live && r.hasPlaceBtn && s.oddsOk !== false && !verdict.ok) r.error = "судья заблокировал: " + verdict.reason;
   logger.log("INFO", live ? "PLACE" : "dry-run", id, JSON.stringify(r));
   return r;
 }
@@ -1368,6 +1395,11 @@ async function tryPlaceFromValueSignals(sigs) {
     if (res && res.placed) { valuePlaceCount++; markValuePlaced(c.key); logger.log("INFO", "[value] ✅ ПОСТАВЛЕНО: " + (res.selected || c.desc) + " @" + (res.selectedOdds || c.expectedOdds) + howTag); }
     else if (res && res.selected) logger.log("INFO", "[value] dry-run: выбрал «" + res.selected + "» @" + (res.selectedOdds || "?") + howTag + (res.error ? " | " + res.error : ""));
     else logger.log("WARN", "[value] простановка не прошла: " + ((res && res.error) || "исход не выбран"));
+    // Telegram-АЛЕРТ в реальном времени (чтобы не читать логи): боевая ставка ИЛИ судья заблокировал (в боевом).
+    if (settings.tgToken && settings.tgChat) {
+      if (res && res.placed) tg("✅ <b>VALUE поставлено</b>\n" + escHtml((c.t1 || "?") + " vs " + (c.t2 || "?")) + "\n" + escHtml(c.desc + " @" + (res.selectedOdds || c.expectedOdds)) + " · value +" + ((c.value || 0) * 100).toFixed(1) + "%").catch(() => {});
+      else if (live && res && res.verifyReason) tg("🛑 <b>Судья отклонил ставку</b>\n" + escHtml((c.t1 || "?") + " vs " + (c.t2 || "?")) + "\n" + escHtml("сигнал: " + c.desc) + "\n" + escHtml(res.verifyReason)).catch(() => {});
+    }
   } catch (e) { logger.log("ERROR", "[value] простановка:", e && e.message); }
   finally { valuePlaceBusy = false; }
 }
@@ -1463,7 +1495,9 @@ function formatValueTelegram(c, res, live) {
 async function runValueCycle(c, live) {
   const booker = findBooker("betano");
   if (!booker) return { ok: false, error: "контора betano не настроена" };
-  pendingBet.set("betano", { outcomeId: c.outcomeId, expectedOdds: c.expectedOdds, desc: c.desc, descFull: c.descFull || c.subject || c.desc, subject: c.subject });
+  // Поля сигнала (kind/side/param/st/t1/t2) — для НЕЗАВИСИМОГО судьи verifyPick перед боевым кликом.
+  pendingBet.set("betano", { outcomeId: c.outcomeId, expectedOdds: c.expectedOdds, desc: c.desc, descFull: c.descFull || c.subject || c.desc, subject: c.subject,
+    kind: c.kind, side: c.side, param: c.param, st: c.st, t1: c.t1, t2: c.t2 });
   // Octo-режим: антидетект/прокси/логин — внутри Octo-профиля, открываем betano.bg в Octo-странице.
   // Иначе — наш Electron-антидетект (запасной путь). Адаптер кладётся в octoWins → placeBet берёт его через bookerWin.
   if (settings.octoMode) {
