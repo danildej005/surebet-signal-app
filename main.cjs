@@ -561,7 +561,9 @@ const CONSENT_JS = `(() => {
   // и старый фильтр выбрасывал саму кнопку «Allow All». Теперь ловим её.
   const vis = (x) => { try { const r = x.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch (_) { return false; } };
   const btns = [...document.querySelectorAll('button,[role=button],a')].filter(vis);
-  const txt = (x) => (x.innerText || '').replace(/\\s+/g, ' ').trim();
+  // Чистим НЕВИДИМЫЕ bidi/zero-width символы (U+200B..200F, 202A..202E, FEFF): у Betano в подписях
+  // консент-кнопок встречается U+200E («List of Vendors‎») → строгое ^reject all$ не срабатывало.
+  const txt = (x) => (x.innerText || '').replace(/[\\u200b-\\u200f\\u202a-\\u202e\\ufeff]/g, '').replace(/\\s+/g, ' ').trim();
   // в консент-контейнере: reject → accept; вне контейнера — только однозначные STRICT-фразы
   let b = btns.find((x) => REJECT.test(txt(x)) && inConsent(x))
        || btns.find((x) => ACCEPT.test(txt(x)) && inConsent(x))
@@ -652,6 +654,21 @@ async function selectLegOutcome(id) {
         return [...document.querySelectorAll(${JSON.stringify(sel)})].map((el, i) => ({ i, id: el.id || "", text: norm(el.innerText) }));
       })()`);
     } catch (e) { return { ok: false, win, cfg, bet, error: "не прочитал кнопки исходов: " + e.message }; }
+    // Ретрай при ПУСТОЙ странице: навигация иногда таймаутит (Octo goto timeout) → 0 кнопок исходов. Перезагружаем,
+    // ждём прорисовку, снимаем консент и читаем ещё раз, прежде чем сдаться (иначе теряем попытку впустую).
+    if (!buttons.length && !win.isDestroyed()) {
+      logger.log("WARN", "  " + id + ": 0 кнопок исходов — перезагружаю страницу и жду ещё раз");
+      try { win.webContents.reload(); } catch { /* ignore */ }
+      for (let i = 0; i < 12 && !win.isDestroyed(); i++) {
+        await sleep(1000);
+        let n = 0; try { n = await win.webContents.executeJavaScript(`document.querySelectorAll(${JSON.stringify(sel)}).length`); } catch { /* ignore */ }
+        if (n > 0) break;
+      }
+      await dismissConsent(win);
+      try {
+        buttons = await win.webContents.executeJavaScript(`(() => { const norm = (s) => (s || "").replace(/\\s+/g, " ").trim(); return [...document.querySelectorAll(${JSON.stringify(sel)})].map((el, i) => ({ i, id: el.id || "", text: norm(el.innerText) })); })()`);
+      } catch { /* ignore */ }
+    }
     let eventUrl = ""; try { eventUrl = win.webContents.getURL(); } catch { /* ignore */ }
     const choice = pickOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons, eventUrl, unit, subject: bet.subject || extractSubject(bet.descFull) });
     if (!choice) {

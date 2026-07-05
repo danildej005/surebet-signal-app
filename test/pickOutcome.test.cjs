@@ -561,3 +561,15 @@ test("ML: агрегат «N+» (25+/35+) НЕ выбирается как по�
   const r = pickOutcome({ desc: "2", expectedOdds: 2.32, buttons: btns, eventUrl: URL, subject: "Alejandro Davidovich Fokina" });
   assert.ok(r && /Alejandro/.test(r.text), "должен взять Alejandro (side 2), не «25+»; взял: " + (r && r.text));
 });
+
+test("ML: голый токен «3» НЕ обыгрывает именованного победителя по кэфу (мисселект «3 1.95»)", () => {
+  const URL = "https://www.betano.bg/en/match-odds/andres-martin-jason-jung/999/"; // player1 = Andres
+  const btns = withIndex([
+    { text: "Andres Martin 1.90" },   // победитель 1 (наш) — кэф ЧУТЬ дальше от 1.93
+    { text: "Jason Jung 1.88" },      // победитель 2
+    { text: "3 1.95" },               // мусор: не победитель, но кэф БЛИЖЕ к 1.93 → старый код брал его
+  ]);
+  const r = pickOutcome({ desc: "1", expectedOdds: 1.93, buttons: btns, eventUrl: URL, subject: "Andres Martin" });
+  assert.ok(r && /Andres/.test(r.text), "должен взять Andres Martin, не «3»; взял: " + (r && r.text));
+  assert.equal(r.how, "name");
+});
