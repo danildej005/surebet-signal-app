@@ -539,3 +539,25 @@ test("Betano гейм-фора БЕЗ имени: фаворит по МАНИ-�
   assert.ok(r && /-6\.5/.test(r.text), "должен взять -6.5 фаворита Leo; взял: " + (r && r.text));
   assert.equal(r.how, "fav");
 });
+
+test("Тотал: экспресс «X and Over/Under N» НЕ путается с чистым тоталом (мисселект из лога)", () => {
+  const btns = withIndex([
+    { text: "Over 18.5 1.20" },                    // чистый матчевый тотал
+    { text: "Ivan Ivanov and Over 18.5 1.10" },    // ЭКСПРЕСС (парлей) — не брать
+  ]);
+  const r = pickOutcome({ desc: "Over 18.5", expectedOdds: 1.2, buttons: btns });
+  assert.ok(r && /^Over 18\.5 1\.20/.test(r.text), "должен взять чистый тотал, не экспресс; взял: " + (r && r.text));
+  // на странице ТОЛЬКО экспресс → отказ (лучше пропустить, чем поставить парлей)
+  assert.strictEqual(pickOutcome({ desc: "Over 18.5", expectedOdds: 1.2, buttons: withIndex([{ text: "Ivan Ivanov and Over 18.5 1.10" }]) }), null);
+});
+
+test("ML: агрегат «N+» (25+/35+) НЕ выбирается как победитель (мисселект из лога)", () => {
+  const URL = "https://www.betano.bg/en/match-odds/felix-auger-aliassime-alejandro-davidovich-fokina/999/"; // player1 = Felix
+  const btns = withIndex([
+    { text: "Felix Auger Aliassime 1.90" },        // победитель 1
+    { text: "Alejandro Davidovich Fokina 2.32" },  // победитель 2 (наш side)
+    { text: "25+ 2.27" },                          // агрегат тотала — НЕ победитель
+  ]);
+  const r = pickOutcome({ desc: "2", expectedOdds: 2.32, buttons: btns, eventUrl: URL, subject: "Alejandro Davidovich Fokina" });
+  assert.ok(r && /Alejandro/.test(r.text), "должен взять Alejandro (side 2), не «25+»; взял: " + (r && r.text));
+});
