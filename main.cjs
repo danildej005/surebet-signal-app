@@ -658,6 +658,26 @@ async function selectLegOutcome(id) {
       // ДИАГНОСТИКА доп-рынков: дампим реальные подписи кнопок, что бот видел — чтобы потом
       // прицельно научить pickOutcome этим рынкам (карточки/угловые/сет-тайм/DNB/esports и т.п.).
       try { logger.log("INFO", "  [диаг " + id + "] исход не подошёл; descFull=" + (bet.descFull || bet.desc || "—") + " | видел кнопок: " + JSON.stringify(buttons.slice(0, 50).map((b) => b.text).filter(Boolean))); } catch { /* ignore */ }
+      // ДИАГ форы: если это была фора (гейм/сет), а линия НЕ в тексте кнопки — покажем, в каком СОСЕДНЕМ элементе
+      // Betano держит линию (голая кэф-кнопка «1.82» → ближайший предок с «±6.5»). По этому дампу починим матчинг.
+      if (id === "betano" && /AH\d?\(/i.test(bet.desc || "")) {
+        try {
+          const ctx = await win.webContents.executeJavaScript(`(() => {
+            const norm = (s) => (s || "").replace(/\\s+/g, " ").trim();
+            const out = [];
+            for (const el of document.querySelectorAll(${JSON.stringify(sel)})) {
+              const t = norm(el.innerText);
+              if (!/^\\d+[.,]\\d+$/.test(t)) continue; // только голая кэф-кнопка (без имени и знаковой линии)
+              let node = el, found = "";
+              for (let up = 0; up < 6 && node; up++) { node = node.parentElement; const nt = norm(node && node.innerText); if (nt && /[+\\-−]\\d+([.,]\\d+)?/.test(nt) && nt.length < 80) { found = nt; break; } }
+              out.push(t + " ⇐ " + (found || "?"));
+              if (out.length >= 12) break;
+            }
+            return out;
+          })()`);
+          if (ctx && ctx.length) logger.log("INFO", "  [диаг betano ctx] голые кэфы → ближайший предок с линией: " + JSON.stringify(ctx));
+        } catch { /* ignore */ }
+      }
       return { ok: false, win, cfg, bet, error: "не нашёл исход (линия/кэф). desc=" + (bet.desc || "—") + " кэф=" + (bet.expectedOdds || "?") + " кнопок:" + buttons.length };
     }
     // имя команды приклеиваем к тексту выбора (у Pinnacle-форы его в кнопке нет) — чтобы кросс-защита
@@ -680,14 +700,18 @@ async function selectLegOutcome(id) {
 // Снять свой выбор (повторный клик по той же кнопке-исходу = убрать из купона). Чтобы купон не
 // копил «осиротевшие» ставки от скипнутых циклов (иначе Betano собирает экспресс → MAX/сумма ломаются).
 async function deselectLeg(id, index) {
-  if (index == null) return;
+  if (index == null) return false;
   const win = bookerWin(id), cfg = BETSLIP[id];
-  if (!win || win.isDestroyed() || !cfg || !cfg.outcomeSel) return;
+  if (!win || win.isDestroyed() || !cfg || !cfg.outcomeSel) return false;
   try {
-    await win.webContents.executeJavaScript(`(() => { const els = [...document.querySelectorAll(${JSON.stringify(cfg.outcomeSel)})]; const el = els[${Number(index)}]; if (el) { el.click(); return true; } return false; })()`);
+    // Клик по кнопке-исходу (toggle). Логируем ПО ФАКТУ: нашли ли кнопку и кликнули. «Снял выбор» без проверки не
+    // пишем — знаем только, что клик отправлен (реальное удаление из купона подтвердит betslip-count, когда будет селектор).
+    const clicked = await win.webContents.executeJavaScript(`(() => { const els = [...document.querySelectorAll(${JSON.stringify(cfg.outcomeSel)})]; const el = els[${Number(index)}]; if (el) { el.click(); return true; } return false; })()`);
     await sleep(400);
-    logger.log("INFO", "  купон: снял выбор", id, "(i=" + index + ")");
-  } catch (e) { logger.log("WARN", "deselectLeg:", id, e.message); }
+    if (clicked) logger.log("INFO", "  купон: клик снятия выбора", id, "(i=" + index + ")");
+    else logger.log("WARN", "  купон: кнопка исхода не найдена", id, "(i=" + index + ") — выбор мог остаться");
+    return !!clicked;
+  } catch (e) { logger.log("WARN", "deselectLeg:", id, e.message); return false; }
 }
 // ПОЛНАЯ ОЧИСТКА купона — убрать ВСЕ накопленные (неподтверждённые) выборы крестиками, чтобы купон
 // был всегда чист и готов к ставке. placed-ставки (с «CASH OUT») крестиков не имеют — не трогаются.
@@ -795,12 +819,12 @@ async function verifyPlaced(win, cfg) {
 async function placeBet(id, stake, live = false) {
   const s = await selectLegOutcome(id);
   if (!s.ok) {
-    const r = { ok: false, error: s.error, selected: s.selected, selectedOdds: s.selectedOdds, how: s.how };
+    const r = { ok: false, error: s.error, selected: s.selected, selectedOdds: s.selectedOdds, how: s.how, selectedIndex: s.selectedIndex };
     logger.log("WARN", "dry-run/place", id, JSON.stringify(r));
     return r;
   }
   const f = await fillStakeOnly(s.win, s.cfg, stake);
-  const r = { ...f, selected: s.selected, selectedOdds: s.selectedOdds, how: s.how, maxStake: s.maxStake, expectedOdds: s.expectedOdds, oddsOk: s.oddsOk };
+  const r = { ...f, selected: s.selected, selectedOdds: s.selectedOdds, how: s.how, maxStake: s.maxStake, expectedOdds: s.expectedOdds, oddsOk: s.oddsOk, selectedIndex: s.selectedIndex };
   if (r.error) { r.ok = false; logger.log("WARN", "dry-run/place", id, JSON.stringify(r)); return r; }
   r.placed = false;
   if (live && r.hasPlaceBtn && s.oddsOk !== false) { await clickPlace(s.win, s.cfg); r.placed = true; }
@@ -1441,8 +1465,15 @@ async function runValueCycle(c, live) {
   }
   if (!onEvent) return { ok: false, error: "событие betano.bg не открылось" };
   const r = await placeBet("betano", c.stake, live);
-  // Очистить купон после НЕзавершённой ставки (dry-run или не прошло) — не оставлять выбор висеть до следующей попытки.
-  if (!r.placed) { try { const bw = bookerWin("betano"); if (bw && !bw.isDestroyed() && BETSLIP.betano) { await clearBetslip(bw, BETSLIP.betano); logger.log("INFO", "[value] купон очищен после " + (live ? "неудачной ставки" : "dry-run")); } } catch { /* ignore */ } }
+  // Снять выбор после НЕзавершённой ставки (dry-run/не прошло) — ПОВТОРНЫМ КЛИКОМ по кнопке-исходу (deselectLeg),
+  // как в вилочном потоке. Раньше звали clearBetslip(clearSel=null у Betano) → no-op, а лог врал «купон очищен»,
+  // пока в купоне копились выборы. deselectLeg логирует «снял выбор» честно (по факту клика).
+  if (!r.placed) {
+    try {
+      if (r.selectedIndex != null) await deselectLeg("betano", r.selectedIndex);
+      else logger.log("INFO", "[value] купон: снимать нечего (исход не выбирался)");
+    } catch { /* ignore */ }
+  }
   return { ...r, candidate: c };
 }
 

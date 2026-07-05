@@ -523,3 +523,19 @@ test("Betano гейм-фора БЕЗ имени: явный фаворит → 
   ]);
   assert.strictEqual(pickOutcome({ desc: "AH1(-3.5)", expectedOdds: 1.55, buttons: close, eventUrl: URL, unit: "game", subject: "Vladyslav Orlov" }), null);
 });
+
+test("Betano гейм-фора БЕЗ имени: фаворит по МАНИ-ЛАЙНУ, не по min всех кнопок (баг Leo −6.5)", () => {
+  const URL = "https://www.betano.bg/en/match-odds/leo-raquillet-tomohiro-masabayashi/999/"; // player1 = Leo
+  // У КАЖДОГО игрока несколько именованных кнопок: мани-лайн ПЕРВЫМ (Leo 1.33 / Tomohiro 2.72), затем сет-форы
+  // (Leo 1.08 — его же +фора, Tomohiro 1.55 — его хендикап). Старый min брал «оппонента» = 1.08/1.55 → фаворит
+  // не явный → отказ. Новая логика сравнивает мани-лайн (1.33 vs 2.72) → Leo явный фаворит → берём «-6.5».
+  const btns = withIndex([
+    { text: "Leo Raquillet 1.33" }, { text: "Tomohiro Masabayashi 2.72" }, // мани-лайн
+    { text: "Leo Raquillet 1.08" }, { text: "Tomohiro Masabayashi 6.10" }, // сет-фора +1.5
+    { text: "Leo Raquillet 2.25" }, { text: "Tomohiro Masabayashi 1.55" }, // сет-фора −1.5
+    { text: "-6.5 1.82" }, { text: "+6.5 1.85" },                           // гейм-фора БЕЗ имени
+  ]);
+  const r = pickOutcome({ desc: "AH1(-6.5)", expectedOdds: 1.82, buttons: btns, eventUrl: URL, unit: "game", subject: "Leo Raquillet" });
+  assert.ok(r && /-6\.5/.test(r.text), "должен взять -6.5 фаворита Leo; взял: " + (r && r.text));
+  assert.equal(r.how, "fav");
+});
