@@ -697,24 +697,33 @@ async function selectLegOutcome(id) {
       // ДИАГНОСТИКА доп-рынков: дампим реальные подписи кнопок, что бот видел — чтобы потом
       // прицельно научить pickOutcome этим рынкам (карточки/угловые/сет-тайм/DNB/esports и т.п.).
       try { logger.log("INFO", "  [диаг " + id + "] исход не подошёл; descFull=" + (bet.descFull || bet.desc || "—") + " | видел кнопок: " + JSON.stringify(buttons.slice(0, 50).map((b) => b.text).filter(Boolean))); } catch { /* ignore */ }
-      // ДИАГ форы: если это была фора (гейм/сет), а линия НЕ в тексте кнопки — покажем, в каком СОСЕДНЕМ элементе
-      // Betano держит линию (голая кэф-кнопка «1.82» → ближайший предок с «±6.5»). По этому дампу починим матчинг.
+      // ДИАГ форы: линия гейм-форы НЕ в тексте кнопки. Ищем, ГДЕ Betano её держит: атрибуты кнопки (data-line?),
+      // предыдущие СОСЕДИ (линия часто левее), любой лист-элемент с ±X в контейнере, классы родителя. По этому дампу
+      // напишем точный матчинг (предки уже проверяли — там пусто).
       if (id === "betano" && /AH\d?\(/i.test(bet.desc || "")) {
         try {
           const ctx = await win.webContents.executeJavaScript(`(() => {
             const norm = (s) => (s || "").replace(/\\s+/g, " ").trim();
+            const sign = /[+\\-−]\\d+(?:[.,]\\d+)?/;
+            const attrs = (el) => { const a = {}; if (el.id) a.id = String(el.id).slice(0,24); if (typeof el.className === "string" && el.className) a.cls = el.className.slice(0,44); try { for (const d of el.attributes) if (/^data-/.test(d.name)) a[d.name] = String(d.value).slice(0,24); } catch(_){} return a; };
             const out = [];
             for (const el of document.querySelectorAll(${JSON.stringify(sel)})) {
               const t = norm(el.innerText);
-              if (!/^\\d+[.,]\\d+$/.test(t)) continue; // только голая кэф-кнопка (без имени и знаковой линии)
-              let node = el, found = "";
-              for (let up = 0; up < 6 && node; up++) { node = node.parentElement; const nt = norm(node && node.innerText); if (nt && /[+\\-−]\\d+([.,]\\d+)?/.test(nt) && nt.length < 80) { found = nt; break; } }
-              out.push(t + " ⇐ " + (found || "?"));
-              if (out.length >= 12) break;
+              if (!/^\\d+[.,]\\d+$/.test(t)) continue; // голая кэф-кнопка
+              const rec = { odds: t, attr: attrs(el) };
+              let p = el.previousElementSibling, prev = "";
+              for (let i = 0; i < 4 && p; i++) { const pt = norm(p.innerText); if (sign.test(pt) && pt.length < 30) { prev = pt; break; } p = p.previousElementSibling; }
+              rec.prevSib = prev || null;
+              let node = el, near = "";
+              for (let up = 0; up < 5 && node && !near; up++) { node = node.parentElement; if (!node) break; try { for (const c of node.querySelectorAll("*")) { const ct = norm(c.innerText); if (sign.test(ct) && ct.length < 22 && !/^\\d+[.,]\\d+$/.test(ct) && !c.firstElementChild) { near = ct; break; } } } catch(_){} }
+              rec.nearLine = near || null;
+              const par = el.parentElement; rec.parentCls = par && typeof par.className === "string" ? par.className.slice(0,44) : "";
+              out.push(rec);
+              if (out.length >= 4) break;
             }
             return out;
           })()`);
-          if (ctx && ctx.length) logger.log("INFO", "  [диаг betano ctx] голые кэфы → ближайший предок с линией: " + JSON.stringify(ctx));
+          if (ctx && ctx.length) logger.log("INFO", "  [диаг betano ctx2] структура голых кэф-кнопок форы: " + JSON.stringify(ctx));
         } catch { /* ignore */ }
       }
       return { ok: false, win, cfg, bet, error: "не нашёл исход (линия/кэф). desc=" + (bet.desc || "—") + " кэф=" + (bet.expectedOdds || "?") + " кнопок:" + buttons.length };
