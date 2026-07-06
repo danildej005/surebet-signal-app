@@ -870,7 +870,13 @@ async function placeBet(id, stake, live = false) {
   r.verified = verdict.ok;
   if (!verdict.ok) { r.verifyReason = verdict.reason; logger.log("WARN", "  [судья] ВЫБОР ≠ СИГНАЛ: " + verdict.reason); }
   else if (!verdict.skip) logger.log("INFO", "  [судья] выбор совпал с сигналом ✓");
-  if (live && r.hasPlaceBtn && s.oddsOk !== false && verdict.ok) { await clickPlace(s.win, s.cfg); r.placed = true; }
+  if (live && r.hasPlaceBtn && s.oddsOk !== false && verdict.ok) {
+    await clickPlace(s.win, s.cfg);
+    // #4: ПОДТВЕРЖДЕНИЕ ПРИЁМА — перечитать страницу (кнопка постановки исчезла = принято). Не подтвердил → НЕ считаем поставленным.
+    const accepted = await verifyPlaced(s.win, s.cfg);
+    r.placed = accepted;
+    if (!accepted) { r.error = "БК не подтвердила приём ставки (verifyPlaced)"; logger.log("ERROR", "🔴 [value] боевой клик, но приём НЕ подтверждён — считаем НЕ поставлено, проверь купон вручную"); }
+  }
   else if (live && r.hasPlaceBtn && s.oddsOk !== false && !verdict.ok) r.error = "судья заблокировал: " + verdict.reason;
   logger.log("INFO", live ? "PLACE" : "dry-run", id, JSON.stringify(r));
   return r;
@@ -1253,6 +1259,7 @@ let sessionStart = 0;
 // ВСЯ сессия (НЕ чистим до её закрытия): key → {sport,sportType,t1,t2,market,side,maxValue,first,last,count,placed,betanoOdds}.
 // Время жизни валуя = last−first (от появления до последнего раза, что видели ≥ порога). placed — для будущей простановки (сейчас 0).
 const sessionSignals = new Map();
+let valueDiagSentNT = 0; // на скольких НЕ-теннисных валуях сессии уже отправляли диаг в Telegram (сброс на новую сессию)
 // Событие-с-валуем → {t1,t2,sport,lastScore,status,ended} для сеттлмента: копим ПОСЛЕДНИЙ счёт из фида,
 // морозим финал (ended), когда событие ушло из фида. key = «t1~t2» (как s.t1~s.t2 в сигнале).
 const sessionEvents = new Map();
@@ -1267,7 +1274,7 @@ async function startValueEngine() {
     const eng = new ValueLiveEngine(settings.bettingcoKey, { onInitDiag: (bk, shape, n) => logger.log("WARN", "[value] " + bk + " init ждёт (" + shape + "), попытка " + n) });
     await eng.init();
     valueEngine = eng;
-    sessionStart = Date.now(); sessionSignals.clear(); sessionEvents.clear(); valuePlaced.length = 0; valuePlaceCount = 0; // новая сессия
+    sessionStart = Date.now(); sessionSignals.clear(); sessionEvents.clear(); valuePlaced.length = 0; valuePlaceCount = 0; valueDiagSentNT = 0; // новая сессия
     const c = eng.counts();
     logger.log("INFO", "[value] движок bettingco поднят: Betano игр " + c.games + " | Pinnacle игр " + c.pinGames);
     // Конфиг запуска в лог — чтобы сразу видеть, что реально включено (частый ловец: valuePlace off / octoMode off / стейк=0).
@@ -1276,7 +1283,9 @@ async function startValueEngine() {
       " · порог=" + ((Number(settings.valueThreshold) || 0) * 100).toFixed(1) + "%" +
       " · рынки=" + ((settings.valuePlaceKinds && settings.valuePlaceKinds.length) ? settings.valuePlaceKinds.join(",") : "все") +
       " · только-вилки=" + (settings.valuePlaceRequireArb ? "да" : "нет") + " · лимит/сут=" + (Number(settings.valueMaxPerDay) || 0) +
-      " · доп матч/маркет/дубли=" + (Number(settings.valuePlaceEventExtra) || 0) + "/" + (Number(settings.valuePlaceMarketExtra) || 0) + "/" + (Number(settings.valuePlaceDupExtra) || 0) + " · спорт=все (ML 3-way с ничьёй отсеивается)");
+      " · доп матч/маркет/дубли=" + (Number(settings.valuePlaceEventExtra) || 0) + "/" + (Number(settings.valuePlaceMarketExtra) || 0) + "/" + (Number(settings.valuePlaceDupExtra) || 0) + " · спорт=все (ML 3-way с ничьёй отсеивается)" +
+      " · боевой-охват=" + ((settings.valueLiveSports && settings.valueLiveSports.length) ? "sportType " + settings.valueLiveSports.join(",") + " (прочие→dry-run)" : "все") +
+      " · гейты боевого: судья+oddsOk+свежий-fair+verifyPlaced");
     sendValuePulse({ scanning: false, note: "", matched: null });
     valueEngineTimer = setInterval(() => { valueEngineTick().catch((e) => logger.log("ERROR", "value-engine:", e && e.message)); }, 1500);
     // Автосейв сессии каждые 2 мин (crash-safety на многодневный сбор): перезаписывает ТОТ ЖЕ файл (имя от sessionStart).
@@ -1341,6 +1350,12 @@ async function valueEngineTick() {
     let vSum = 0, lifeSum = 0, placed = 0; const arr = [...sessionSignals.values()];
     for (const e of arr) { vSum += e.maxValue; lifeSum += sigLife(e); if (e.placed) placed++; }
     const n = arr.length, top = sigs[0] || null;
+    // Диаг НЕ-теннис → Telegram (.txt): набрали N чужих валуёв → шлём срез сессии для доработки других спортов.
+    const ntEvery = Number(settings.valueDiagNonTennisEvery) || 0;
+    if (ntEvery > 0 && settings.tgToken && settings.tgChat) {
+      const nt = arr.filter((e) => Number(e.sportType) !== 3).length;
+      if (nt >= valueDiagSentNT + ntEvery) { valueDiagSentNT = nt; sendNonTennisDiag(nt).catch(() => {}); }
+    }
     sendValuePulse({ on: true, live: !!settings.valueLive, scanning: false, error: "",
       candidates: sigs.length, top: top ? top.value : null, ageMs: Math.round((st.ageB + st.ageP) / 2),
       sessDetected: n, sessPlaced: placed, sessAvg: n ? vSum / n : 0, sessLife: n ? lifeSum / n : 0,
@@ -1515,7 +1530,32 @@ async function runValueCycle(c, live) {
     if (isEventUrl(u)) { onEvent = true; break; }
   }
   if (!onEvent) return { ok: false, error: "событие betano.bg не открылось" };
-  const r = await placeBet("betano", c.stake, live);
+  // === ГЕЙТЫ БОЕВОГО КЛИКА (перед реальными деньгами) — не проходит → падаем в dry-run (выбор без клика) ===
+  let liveOk = live;
+  if (liveOk) {
+    // (A) ОХВАТ: боевой пока только для разрешённых спортов (по умолч. теннис). Прочие — dry-run (детект/отладка идут дальше).
+    const allow = Array.isArray(settings.valueLiveSports) ? settings.valueLiveSports.map(Number) : [];
+    if (allow.length && !allow.includes(Number(c.sportType))) {
+      liveOk = false;
+      logger.log("INFO", "[value] боевой пропущен: спорт sportType=" + c.sportType + " не в списке боевых " + JSON.stringify(allow) + " → dry-run");
+    }
+  }
+  if (liveOk) {
+    // (B) #4b СВЕЖИЙ FAIR: перевес ЕЩЁ есть? Пересчёт по последнему опросу движка (обе БК ~1.5с в фоне) — за ~7–15с
+    // открытия события Pinnacle мог уехать, а oddsOk смотрит только Betano. Не подтвердилось → НЕ ставим живьём.
+    try {
+      const thr = Number(settings.valueThreshold) || 0.02;
+      const fresh = valueEngine ? valueEngine.scan({ threshold: -1, maxPlausible: 0.25,
+        marginMax: Number(settings.valueMarginMax) || 0, oddsMin: Number(settings.valueOddsMin) || 0, oddsMax: Number(settings.valueOddsMax) || 0 }) : [];
+      const m = fresh.find((s) => s.t1 === c.t1 && s.t2 === c.t2 && s.market === c.market && s.side === c.side);
+      const fv = m ? m.value : null;
+      if (fv == null || fv < thr) {
+        liveOk = false;
+        logger.log("WARN", "[value] боевой ОТМЕНЁН: перевес испарился (свежий value " + (fv == null ? "исчез" : (fv * 100).toFixed(1) + "%") + " < порога " + (thr * 100).toFixed(1) + "%) → dry-run");
+      } else logger.log("INFO", "[value] свежий fair ок: value " + (fv * 100).toFixed(1) + "% ≥ порога → боевой разрешён");
+    } catch (e) { liveOk = false; logger.log("WARN", "[value] боевой отменён: не пересчитал свежий value (" + (e && e.message) + ") → dry-run"); }
+  }
+  const r = await placeBet("betano", c.stake, liveOk);
   // Снять выбор после НЕзавершённой ставки (dry-run/не прошло) — ПОВТОРНЫМ КЛИКОМ по кнопке-исходу (deselectLeg),
   // как в вилочном потоке. Раньше звали clearBetslip(clearSel=null у Betano) → no-op, а лог врал «купон очищен»,
   // пока в купоне копились выборы. deselectLeg логирует «снял выбор» честно (по факту клика).
@@ -1812,6 +1852,60 @@ async function tg(text) {
   if (!settings.tgToken || !settings.tgChat) return { ok: false, error: "не заданы токен/chat_id" };
   await ensureTgProxy();
   return sendTgNet(text);
+}
+
+// Отправка ФАЙЛА в Telegram (sendDocument, multipart) — для диаг-срезов, которые не влезают в текст (лимит 4096).
+function sendTgDocument(filePath, caption, { timeoutMs = 30000 } = {}) {
+  return new Promise((resolve) => {
+    let fileBuf; try { fileBuf = require("node:fs").readFileSync(filePath); } catch (e) { resolve({ ok: false, error: "файл не прочитан: " + e.message }); return; }
+    const base = String(settings.tgApiBase || "https://api.telegram.org").trim().replace(/\/+$/, "");
+    const url = `${base}/bot${settings.tgToken}/sendDocument`;
+    const boundary = "----sbdiag" + Date.now().toString(16);
+    const name = require("node:path").basename(filePath);
+    const fld = (nm, v) => Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${nm}"\r\n\r\n${v}\r\n`);
+    const head = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="document"; filename="${name}"\r\nContent-Type: text/plain\r\n\r\n`);
+    const parts = [fld("chat_id", String(settings.tgChat))];
+    if (caption) parts.push(fld("caption", caption));
+    parts.push(head, fileBuf, Buffer.from(`\r\n--${boundary}--\r\n`));
+    const payload = Buffer.concat(parts);
+    let req; try { req = net.request({ method: "POST", url, session: tgSes || undefined }); } catch (e) { resolve({ ok: false, error: e.message }); return; }
+    req.setHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+    req.on("login", (authInfo, cb) => { if (authInfo.isProxy && tgCreds) cb(tgCreds.user, tgCreds.pass); else cb(); });
+    let body = ""; const timer = setTimeout(() => { try { req.abort(); } catch { /* ignore */ } resolve({ ok: false, error: "таймаут" }); }, timeoutMs);
+    req.on("response", (res) => { res.on("data", (d) => { body += d.toString(); }); res.on("end", () => { clearTimeout(timer); try { const j = JSON.parse(body); resolve(j.ok ? { ok: true } : { ok: false, error: j.description || ("HTTP " + res.statusCode) }); } catch { resolve({ ok: false, error: "HTTP " + res.statusCode }); } }); });
+    req.on("error", (e) => { clearTimeout(timer); resolve({ ok: false, error: e.message }); });
+    try { req.write(payload); req.end(); } catch (e) { clearTimeout(timer); resolve({ ok: false, error: e.message }); }
+  });
+}
+async function tgDoc(filePath, caption) {
+  if (TELEGRAM_FROZEN) return { ok: false, error: "telegram заморожен" };
+  if (!settings.tgToken || !settings.tgChat) return { ok: false, error: "не заданы токен/chat_id" };
+  await ensureTgProxy();
+  return sendTgDocument(filePath, caption);
+}
+
+// Срез ТЕКУЩЕЙ сессии для доработки НЕ-теннисных спортов: из main.log берём только полезные строки
+// (🎯 сигналы, [value] попытки/отказы, [диаг] дампы кнопок, вердикты судьи, WARN/ERROR) с момента старта сессии,
+// пишем .txt и шлём документом в Telegram. Владелец пересылает его — по нему сразу видно, что и где промахивается.
+async function sendNonTennisDiag(ntCount) {
+  try {
+    const fs = require("node:fs"), path = require("node:path");
+    const logDir = (logger.dir && logger.dir()) || app.getPath("userData");
+    let all = ""; try { all = fs.readFileSync(path.join(logDir, "main.log"), "utf8"); } catch { /* ignore */ }
+    const startIso = new Date(sessionStart || Date.now()).toISOString();
+    const lines = all.split("\n").filter((ln) => {
+      const m = ln.match(/^\[([^\]]+)\]/); if (!m || m[1] < startIso) return false;       // только текущая сессия (ISO сравнивается лексикографически)
+      if (!/\[value\]|\[диаг|🎯| WARN | ERROR |судья/.test(ln)) return false;               // только полезное
+      if (/простановка\(dry-run\): сигналов 0 /.test(ln)) return false;                     // холостой тик — не нужен
+      if (/сессия сохранена|анти-разлогин/.test(ln)) return false;                          // служебный шум
+      return true;
+    });
+    const dumpPath = path.join(logDir, "value-diag-session.txt");
+    fs.writeFileSync(dumpPath, lines.join("\n"));
+    const cap = "🧪 Диаг сессии (для доработки не-тенниса): не-теннис валуёв " + ntCount + " · старт " + startIso.slice(11, 19) + " · " + lines.length + " строк";
+    const r = await tgDoc(dumpPath, cap);
+    logger.log(r && r.ok ? "INFO" : "WARN", "[value] диаг-срез в Telegram:", r && r.ok ? ("отправлен (" + lines.length + " строк, не-теннис " + ntCount + ")") : ("НЕ отправлен: " + (r && r.error)));
+  } catch (e) { logger.log("WARN", "[value] диаг-срез:", e && e.message); }
 }
 
 // ── цикл слежения ─────────────────────────────────────────────────────────────

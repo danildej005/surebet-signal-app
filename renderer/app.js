@@ -1,6 +1,9 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 
+// Версия приложения в шапке — чтобы точно видеть, что сейчас в работе.
+try { const v = window.api && window.api.appVersion; if (v && $("appVer")) $("appVer").textContent = "v" + v; } catch (e) { /* ignore */ }
+
 function renderStatus(s) {
   if (!s) return;
   const setText = (id, t) => { const e = $(id); if (e) e.textContent = t; }; // верхние элементы могли быть убраны

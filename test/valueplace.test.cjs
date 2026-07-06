@@ -42,6 +42,7 @@ test("signalToCandidate: descFull несёт единицу (marketUnit её в�
   assert.equal(c.descFull, "AH1(-6.5) Guido Ivan Justo - геймы");
   assert.equal(bk.marketUnit(c.descFull), "game");   // единица читается из descFull
   assert.equal(c.expectedOdds, 2.0); assert.equal(c.stake, 5);
+  assert.equal(c.sportType, 3);                       // несёт спорт — для теннис-гейта боевого клика
   assert.equal(c.url, "https://www.betano.bg/live/x/86655013/");
   assert.equal(c.key, "Guido Ivan Justo~Olle Wallin|/Main/Main/Game SPREAD -6.5|A");
   assert.equal(vp.betDesc(sig({ kind: "SPREAD", param: "-1.5", side: "A", st: "/Main/Main" })).unit, "сеты");
