@@ -1,8 +1,8 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 
-// Версия приложения в шапке — чтобы точно видеть, что сейчас в работе.
-try { const v = window.api && window.api.appVersion; if (v && $("appVer")) $("appVer").textContent = "v" + v; } catch (e) { /* ignore */ }
+// Версия приложения в шапке — чтобы точно видеть, что сейчас в работе (через IPC).
+try { if (window.api && window.api.getVersion) window.api.getVersion().then((v) => { if (v && $("appVer")) $("appVer").textContent = "v" + v; }).catch(() => {}); } catch (e) { /* ignore */ }
 
 function renderStatus(s) {
   if (!s) return;

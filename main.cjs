@@ -294,6 +294,21 @@ async function openOctoBooker(profile, overrideUrl) {
     win = r.win; win.__browser = r.browser;
     octoWins.set(id, win);
     try { r.browser.on("disconnected", () => { octoWins.delete(id); logger.log("INFO", "Octo: соединение разорвано", id); }); } catch { /* ignore */ }
+    // ЭКОНОМИЯ ПРОКСИ-ТРАФИКА: режем тяжёлое косметическое (картинки/видео-стримы/шрифты). Нам нужен только DOM с
+    // кэфами — script/xhr/fetch/document/stylesheet НЕ трогаем (иначе рынки/вёрстка не прогрузятся). Ставим ОДИН раз
+    // на страницу до первой навигации → действует и на keep-alive перезагрузки, и на открытие событий.
+    try {
+      const page = win.page;
+      if (page && !win.__resBlock && settings.octoBlockResources !== false) {
+        win.__resBlock = true;
+        await page.setRequestInterception(true);
+        page.on("request", (req) => {
+          try { const t = req.resourceType(); if (t === "image" || t === "media" || t === "font") req.abort().catch(() => {}); else req.continue().catch(() => {}); }
+          catch { try { req.continue(); } catch { /* ignore */ } }
+        });
+        logger.log("INFO", "Octo: блок ресурсов ВКЛ (image/media/font) — экономия прокси-трафика");
+      }
+    } catch (e) { logger.log("WARN", "Octo блок ресурсов:", e && e.message); }
     logger.log("INFO", "Octo подключён:", id, "uuid:", String(settings.octoProfileId).slice(0, 8) + "…", "ws:", String(r.wsEndpoint).slice(0, 40));
   }
   lastBookerId = id;
@@ -2090,7 +2105,10 @@ function startLoop() {
   if (timer) clearInterval(timer);
   timer = setInterval(() => { tick().catch((e) => { status.lastError = e.message; logger.log("ERROR", "tick:", e); }); }, Math.max(3000, settings.pollMs || 8000));
   if (keepAliveTimer) clearInterval(keepAliveTimer);
-  keepAliveTimer = setInterval(() => { keepBookersAlive().catch(() => {}); keepOctoAlive().catch(() => {}); }, 45000);
+  // Интервал keep-alive настраиваемый: реже = меньше перезагрузок страницы = меньше прокси-трафика (дефолт 3 мин;
+  // раньше было 45с — избыточно, Betano-сессия живёт минутами). Мин. 45с, чтобы не отключить продление совсем.
+  const kaMs = Math.max(45000, Number(settings.keepAliveMs) || 180000);
+  keepAliveTimer = setInterval(() => { keepBookersAlive().catch(() => {}); keepOctoAlive().catch(() => {}); }, kaMs);
   // LIVE-value движок здесь НЕ трогаем: сессия запускается/останавливается ОТДЕЛЬНОЙ кнопкой (value-run),
   // сохранение конфига её не рестартит. Если сессия идёт (valueRun) и движок упал — tick поднимет его сам.
 }
@@ -2116,6 +2134,7 @@ function initAutoUpdate() {
 
 // ── IPC ───────────────────────────────────────────────────────────────────────
 ipcMain.handle("get-status", () => ({ ...status, settings: maskedSettings() }));
+ipcMain.handle("get-version", () => { try { return app.getVersion(); } catch { return ""; } }); // версия для шапки панели (require в sandbox-preload не работает)
 ipcMain.handle("save-settings", (_e, patch) => {
   const clean = {};
   if (typeof patch.tgToken === "string" && patch.tgToken.trim()) clean.tgToken = patch.tgToken.trim();

@@ -1,12 +1,8 @@
 "use strict";
 const { contextBridge, ipcRenderer } = require("electron");
 
-// Версия приложения — для шапки панели (чтобы владелец видел, что реально в работе). Читаем package.json синхронно.
-let APP_VERSION = "";
-try { APP_VERSION = require("./package.json").version; } catch { try { APP_VERSION = require("../package.json").version; } catch { /* ignore */ } }
-
 contextBridge.exposeInMainWorld("api", {
-  appVersion: APP_VERSION,
+  getVersion: () => ipcRenderer.invoke("get-version"), // версия для шапки (через IPC — require файла в sandbox-preload недоступен)
   getStatus: () => ipcRenderer.invoke("get-status"),
   saveSettings: (patch) => ipcRenderer.invoke("save-settings", patch),
   runValueSession: (on) => ipcRenderer.invoke("value-run", on), // старт/стоп value-сессии отдельной кнопкой
