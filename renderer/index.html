@@ -49,8 +49,12 @@
       <div id="valueMarkets"></div>
     </div>
     <div class="grid2">
-      <label>Порог value, %<input id="valueThreshold" type="number" min="0" step="0.1" placeholder="напр. 5" /></label>
+      <label>Порог value ОТ, %<input id="valueThreshold" type="number" min="0" step="0.1" placeholder="напр. 5" /></label>
+      <label>Потолок value ДО, %<input id="valueThresholdMax" type="number" min="0" step="0.5" placeholder="напр. 25 (выше = артефакт)" /></label>
+    </div>
+    <div class="grid2">
       <label>Ставка фикс (валюта Betano)<input id="valueStake" type="number" min="0" step="1" placeholder="напр. 10" /></label>
+      <label>Обновление страницы (сек)<input id="keepAliveSec" type="number" min="45" step="15" placeholder="180 (реже = меньше трафика)" /></label>
     </div>
     <div class="grid2">
       <label>Кэф от<input id="valueOddsMin" type="number" min="0" step="0.05" placeholder="0 = без границы" /></label>

@@ -20,6 +20,8 @@ function renderStatus(s) {
     valueInit = true;
     const v = s.settings;
     $("valueThreshold").value = Math.round((v.valueThreshold != null ? v.valueThreshold : 0.05) * 1000) / 10; // доля → %
+    if ($("valueThresholdMax")) $("valueThresholdMax").value = Math.round((v.valueMax != null ? v.valueMax : 0.25) * 1000) / 10; // потолок value, доля → %
+    if ($("keepAliveSec")) $("keepAliveSec").value = Math.round((v.keepAliveMs != null ? v.keepAliveMs : 180000) / 1000); // мс → сек
     $("valueOddsMin").value = v.valueOddsMin || "";
     $("valueOddsMax").value = v.valueOddsMax || "";
     if (v.valueStake) $("valueStake").value = v.valueStake;
@@ -160,6 +162,8 @@ function renderValueMarkets() {
 function saveValue() {
   const patch = {
     valueThreshold: (Number($("valueThreshold").value) || 5) / 100,
+    valueMax: $("valueThresholdMax") ? ((Number($("valueThresholdMax").value) || 25) / 100) : 0.25, // потолок value (% → доля); выше = артефакт, режем
+    keepAliveMs: $("keepAliveSec") ? Math.max(45000, (Number($("keepAliveSec").value) || 180) * 1000) : 180000, // сек → мс, мин 45с
     valueStake: Number($("valueStake").value) || 0,
     valueMaxPerDay: Number($("valueMaxPerDay").value) || 0,
     valuePlaceDupExtra: $("valuePlaceDupExtra") ? (Number($("valuePlaceDupExtra").value) || 0) : 0,

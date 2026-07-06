@@ -1336,7 +1336,7 @@ async function valueEngineTick() {
       sendValuePulse({ note: st.reinitFail ? "реинит…" : st.reinit ? "переинициализация плеча…" : (st.rate ? "rate-limit…" : "") });
       return;
     }
-    const sigs = valueEngine.scan({ threshold: Number(settings.valueThreshold) || 0.03, maxPlausible: 0.25,
+    const sigs = valueEngine.scan({ threshold: Number(settings.valueThreshold) || 0.03, maxPlausible: Number(settings.valueMax) || 0.25,
       marginMax: Number(settings.valueMarginMax) || 0,   // 0 = фильтр маржи ВЫКЛ (калибровка: видим всё); включим после
       oddsMin: Number(settings.valueOddsMin) || 0, oddsMax: Number(settings.valueOddsMax) || 0 });
     const now = Date.now();
@@ -1560,7 +1560,7 @@ async function runValueCycle(c, live) {
     // открытия события Pinnacle мог уехать, а oddsOk смотрит только Betano. Не подтвердилось → НЕ ставим живьём.
     try {
       const thr = Number(settings.valueThreshold) || 0.02;
-      const fresh = valueEngine ? valueEngine.scan({ threshold: -1, maxPlausible: 0.25,
+      const fresh = valueEngine ? valueEngine.scan({ threshold: -1, maxPlausible: Number(settings.valueMax) || 0.25,
         marginMax: Number(settings.valueMarginMax) || 0, oddsMin: Number(settings.valueOddsMin) || 0, oddsMax: Number(settings.valueOddsMax) || 0 }) : [];
       const m = fresh.find((s) => s.t1 === c.t1 && s.t2 === c.t2 && s.market === c.market && s.side === c.side);
       const fv = m ? m.value : null;
@@ -2162,6 +2162,8 @@ ipcMain.handle("save-settings", (_e, patch) => {
   if (patch.valueOddsMax !== undefined) clean.valueOddsMax = Math.max(0, Number(patch.valueOddsMax) || 0);
   if (patch.valueMarginMax !== undefined) clean.valueMarginMax = Math.max(0, Number(patch.valueMarginMax) || 0);
   if (patch.valueThreshold !== undefined) clean.valueThreshold = Math.max(0, Number(patch.valueThreshold) || 0.05);
+  if (patch.valueMax !== undefined) clean.valueMax = Math.max(0.01, Number(patch.valueMax) || 0.25);           // потолок value (доля)
+  if (patch.keepAliveMs !== undefined) clean.keepAliveMs = Math.max(45000, Number(patch.keepAliveMs) || 180000); // период анти-разлогина (мс)
   if (patch.valueStake !== undefined) clean.valueStake = Math.max(0, Number(patch.valueStake) || 0);
   if (patch.valueMaxPerDay !== undefined) clean.valueMaxPerDay = Math.max(0, Number(patch.valueMaxPerDay) || 0);
   if (patch.valueRefSource === "ps3838" || patch.valueRefSource === "oddspapi") clean.valueRefSource = patch.valueRefSource;
