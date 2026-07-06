@@ -605,7 +605,7 @@ async function dismissConsent(win) {
 // === Шаги простановки (переиспользуются в placeBet ОДНОГО плеча и в оркестраторе runBot) ===
 
 // Шаг 1: выбрать исход в купоне конторы + прочитать максимум. Сумму НЕ вписывает.
-async function selectLegOutcome(id) {
+async function selectLegOutcome(id, opts = {}) {
   const win = bookerWin(id);
   if (!win || win.isDestroyed()) return { ok: false, error: "окно конторы не открыто" };
   const cfg = BETSLIP[id];
@@ -732,6 +732,12 @@ async function selectLegOutcome(id) {
     // «одна сторона на обоих плечах» и лог видели КОМАНДУ, а не только «+1.5 1.632».
     selected = (choice.team && !choice.text.toLowerCase().includes(choice.team.toLowerCase()) ? choice.team + " " : "") + choice.text;
     selectedOdds = choice.odds; how = choice.how; pickedIndex = choice.i;
+    // РАННИЙ ГЕЙТ КЭФА: кэф выбранной кнопки известен ДО клика (из текста). Уехал ниже допуска → НЕ открываем купон,
+    // не читаем макс, не пишем сумму — просто скип (иначе зря дёргаем купон и рискуем накоплением экспресса).
+    if (opts.earlyOddsGate) {
+      const eo = Number(bet.expectedOdds) || 0, co = Number(selectedOdds) || 0;
+      if (eo && co && co < eo * (1 - ODDS_TOLERANCE)) return { ok: false, win, cfg, bet, selected, selectedOdds, how, oddsOk: false, error: "кэф уехал до купона: " + co + " < ожид " + eo + " (купон не открывали)" };
+    }
     try {
       const clicked = await win.webContents.executeJavaScript(`(() => { const els = [...document.querySelectorAll(${JSON.stringify(sel)})]; const el = els[${Number(choice.i)}]; if (el) { el.click(); return true; } return false; })()`);
       if (!clicked) return { ok: false, win, cfg, bet, selected, selectedOdds, how, error: "кнопка исхода не кликнулась (i=" + choice.i + ")" };
@@ -751,7 +757,8 @@ async function selectLegOutcome(id) {
     }
   }
   if (cfg.outcomeSel) await dismissConsent(win); // оверлей мог всплыть к моменту чтения макса — закрыть
-  const maxStake = cfg.outcomeSel ? await readBookmakerMax(win, id) : null;
+  // Макс НЕ читаем при skipMax (value: фикс-стейк, лимит не нужен + клик MAX пачкал поле «непонятной суммой»).
+  const maxStake = (cfg.outcomeSel && !opts.skipMax) ? await readBookmakerMax(win, id) : null;
   const exp = bet.expectedOdds;
   const oddsOk = (exp && selectedOdds) ? (selectedOdds >= exp * (1 - ODDS_TOLERANCE)) : null;
   return { ok: true, win, cfg, bet, selected, selectedOdds, how, maxStake, expectedOdds: exp || null, oddsOk, selectedIndex: pickedIndex };
@@ -772,6 +779,34 @@ async function deselectLeg(id, index) {
     else logger.log("WARN", "  купон: кнопка исхода не найдена", id, "(i=" + index + ") — выбор мог остаться");
     return !!clicked;
   } catch (e) { logger.log("WARN", "deselectLeg:", id, e.message); return false; }
+}
+// ГАРАНТИЯ ПУСТОГО КУПОНА: поле суммы (cfg.stake) есть = купон не пуст. Чистим кликами по «удалить/крестик»,
+// не вышло — перезагрузкой события (надёжно). Нужно, чтобы следующая ставка НЕ копилась экспрессом: кэф мог уехать
+// в момент submit → БК не приняла (verifyPlaced=false), но выбор остался висеть. Возврат true, если купон пуст.
+async function ensureBetslipClean(win, cfg, tries = 6) {
+  if (!win || win.isDestroyed() || !cfg || !cfg.stake) return true;
+  const hasSel = async () => { try { return await win.webContents.executeJavaScript(`!!document.querySelector(${JSON.stringify(cfg.stake)})`); } catch { return false; } };
+  for (let i = 0; i < tries && !win.isDestroyed(); i++) {
+    if (!(await hasSel())) return true;
+    try {
+      await win.webContents.executeJavaScript(`(() => {
+        const rx = /remove|delete|close|clear|trash|remover|eliminar|limpar|excluir|apagar|очист|удал/i;
+        let n = 0;
+        for (const e of document.querySelectorAll('button,[role=button],a,[aria-label],[title]')) {
+          const al = ((e.getAttribute && (e.getAttribute('aria-label') || e.getAttribute('title'))) || '');
+          const cls = (typeof e.className === 'string' ? e.className : '');
+          const t = (e.innerText || '').trim();
+          if (rx.test(al) || rx.test(cls) || t === '×' || t === '✕' || /^[xX]$/.test(t)) { try { e.click(); n++; } catch (_) {} }
+        }
+        return n;
+      })()`);
+    } catch { /* ignore */ }
+    await sleep(700);
+  }
+  if (!(await hasSel())) return true;
+  // клики не помогли → перезагрузка события = гарантированно чистый купон (редкий крайний случай)
+  try { const u = win.webContents.getURL(); if (u && /^https?:/i.test(u)) { logger.log("INFO", "  купон: не очистился кликами — перезагружаю событие"); await win.loadURL(u); await sleep(2500); } } catch { /* ignore */ }
+  return !(await hasSel());
 }
 // ПОЛНАЯ ОЧИСТКА купона — убрать ВСЕ накопленные (неподтверждённые) выборы крестиками, чтобы купон
 // был всегда чист и готов к ставке. placed-ставки (с «CASH OUT») крестиков не имеют — не трогаются.
@@ -876,8 +911,8 @@ async function verifyPlaced(win, cfg) {
 }
 
 // Простановка ОДНОГО плеча (IPC dry-run/place): выбор → сумма → (live) клик.
-async function placeBet(id, stake, live = false) {
-  const s = await selectLegOutcome(id);
+async function placeBet(id, stake, live = false, opts = {}) {
+  const s = await selectLegOutcome(id, opts);
   if (!s.ok) {
     const r = { ok: false, error: s.error, selected: s.selected, selectedOdds: s.selectedOdds, how: s.how, selectedIndex: s.selectedIndex };
     logger.log("WARN", "dry-run/place", id, JSON.stringify(r));
@@ -1284,6 +1319,7 @@ let sessionStart = 0;
 // Время жизни валуя = last−first (от появления до последнего раза, что видели ≥ порога). placed — для будущей простановки (сейчас 0).
 const sessionSignals = new Map();
 let valueDiagSentNT = 0; // на скольких НЕ-теннисных валуях сессии уже отправляли диаг в Telegram (сброс на новую сессию)
+let valueGapN = 0, valueGapSum = 0, valueGapGone = 0; // дрейф кэфа фид→страница за сессию: попыток / сумма Δ / сколько «уехало» (oddsOk=false)
 // Событие-с-валуем → {t1,t2,sport,lastScore,status,ended} для сеттлмента: копим ПОСЛЕДНИЙ счёт из фида,
 // морозим финал (ended), когда событие ушло из фида. key = «t1~t2» (как s.t1~s.t2 в сигнале).
 const sessionEvents = new Map();
@@ -1298,7 +1334,7 @@ async function startValueEngine() {
     const eng = new ValueLiveEngine(settings.bettingcoKey, { onInitDiag: (bk, shape, n) => logger.log("WARN", "[value] " + bk + " init ждёт (" + shape + "), попытка " + n) });
     await eng.init();
     valueEngine = eng;
-    sessionStart = Date.now(); sessionSignals.clear(); sessionEvents.clear(); valuePlaced.length = 0; valuePlaceCount = 0; valueDiagSentNT = 0; // новая сессия
+    sessionStart = Date.now(); sessionSignals.clear(); sessionEvents.clear(); valuePlaced.length = 0; valuePlaceCount = 0; valueDiagSentNT = 0; valueGapN = 0; valueGapSum = 0; valueGapGone = 0; // новая сессия
     const c = eng.counts();
     logger.log("INFO", "[value] движок bettingco поднят: Betano игр " + c.games + " | Pinnacle игр " + c.pinGames);
     // Конфиг запуска в лог — чтобы сразу видеть, что реально включено (частый ловец: valuePlace off / octoMode off / стейк=0).
@@ -1432,13 +1468,25 @@ async function tryPlaceFromValueSignals(sigs) {
     // Пометка способа выбора (для отдельной статы): how=name/desc/id/fav; fav = БЕЗЫМЯННАЯ фора, привязана по фавориту.
     const howTag = res && res.how ? " [how=" + res.how + (res.how === "fav" ? " #безымянная-фора(по фавориту)" : "") + "]" : "";
     if (res && res.placed) { valuePlaceCount++; markValuePlaced(c.key); logger.log("INFO", "[value] ✅ ПОСТАВЛЕНО: " + (res.selected || c.desc) + " @" + (res.selectedOdds || c.expectedOdds) + howTag); }
-    else if (res && res.selected) logger.log("INFO", "[value] dry-run: выбрал «" + res.selected + "» @" + (res.selectedOdds || "?") + howTag + (res.error ? " | " + res.error : ""));
+    else if (res && res.selected) {
+      // Выбрал, но НЕ поставил — показываем ПОЧЕМУ (иначе «dry-run» путает в боевом). Ранний гейт = купон не открывали.
+      const early = res.error && /купон не открывали/.test(res.error);
+      const why = early ? "пропуск (кэф уехал до купона)"
+        : !live ? "dry-run: выбрал"
+        : res.verifyReason ? "боевой НЕ поставил (судья: " + res.verifyReason + ")"
+        : res.oddsOk === false ? "боевой НЕ поставил (кэф уехал: " + (res.selectedOdds || "?") + " < ожид " + c.expectedOdds + ")"
+        : "боевой НЕ поставил (" + (res.error || "гейт") + ")";
+      logger.log("INFO", "[value] " + why + " «" + res.selected + "» @" + (res.selectedOdds || "?") + howTag);
+    }
     else logger.log("WARN", "[value] простановка не прошла: " + ((res && res.error) || "исход не выбран"));
     // Telegram-АЛЕРТ в реальном времени (чтобы не читать логи): боевая ставка ИЛИ судья заблокировал (в боевом).
     if (settings.tgToken && settings.tgChat) {
       if (res && res.placed) tg("✅ <b>VALUE поставлено</b>\n" + escHtml((c.t1 || "?") + " vs " + (c.t2 || "?")) + "\n" + escHtml(c.desc + " @" + (res.selectedOdds || c.expectedOdds)) + " · value +" + ((c.value || 0) * 100).toFixed(1) + "%").catch(() => {});
       else if (live && res && res.verifyReason) tg("🛑 <b>Судья отклонил ставку</b>\n" + escHtml((c.t1 || "?") + " vs " + (c.t2 || "?")) + "\n" + escHtml("сигнал: " + c.desc) + "\n" + escHtml(res.verifyReason)).catch(() => {});
     }
+    // ПАУЗА между попытками (держим valuePlaceBusy → следующая не стартует): успех — 10с, отказ — 3с. Купон уже
+    // очищен в runValueCycle; пауза даёт странице устаканиться и разносит ставки по времени.
+    await sleep(res && res.placed ? 10000 : 3000);
   } catch (e) { logger.log("ERROR", "[value] простановка:", e && e.message); }
   finally { valuePlaceBusy = false; }
 }
@@ -1579,16 +1627,14 @@ async function runValueCycle(c, live) {
       } else logger.log("INFO", "[value] свежий fair ок: value " + (fv * 100).toFixed(1) + "% ≥ порога → боевой разрешён");
     } catch (e) { liveOk = false; logger.log("WARN", "[value] боевой отменён: не пересчитал свежий value (" + (e && e.message) + ") → dry-run"); }
   }
-  const r = await placeBet("betano", c.stake, liveOk);
-  // Снять выбор после НЕзавершённой ставки (dry-run/не прошло) — ПОВТОРНЫМ КЛИКОМ по кнопке-исходу (deselectLeg),
-  // как в вилочном потоке. Раньше звали clearBetslip(clearSel=null у Betano) → no-op, а лог врал «купон очищен»,
-  // пока в купоне копились выборы. deselectLeg логирует «снял выбор» честно (по факту клика).
-  if (!r.placed) {
-    try {
-      if (r.selectedIndex != null) await deselectLeg("betano", r.selectedIndex);
-      else logger.log("INFO", "[value] купон: снимать нечего (исход не выбирался)");
-    } catch { /* ignore */ }
-  }
+  // value-путь: макс НЕ читаем (фикс-стейк) + РАННИЙ ГЕЙТ кэфа (уехал на странице → купон не открываем, скип).
+  const r = await placeBet("betano", c.stake, liveOk, { skipMax: true, earlyOddsGate: true });
+  // ГАРАНТИЯ ЧИСТОГО КУПОНА после ЛЮБОЙ попытки (успех/отказ/непринято). При успехе купон = чек (поля суммы нет → сразу
+  // чисто). При непринятой ставке (кэф уехал в submit) выбор остаётся висеть → чистим, иначе следующая копится экспрессом.
+  try {
+    const bw = bookerWin("betano");
+    if (bw && !bw.isDestroyed() && BETSLIP.betano) { const clean = await ensureBetslipClean(bw, BETSLIP.betano); if (!clean) logger.log("WARN", "[value] купон НЕ удалось очистить полностью — проверь вручную"); }
+  } catch { /* ignore */ }
   return { ...r, candidate: c };
 }
 
