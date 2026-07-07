@@ -16,6 +16,22 @@ test("matchEvents: матч по именам без учёта порядка/�
   assert.equal(m[0].p.textId, "/P/9");
 });
 
+test("teamKey/matchEvents: разные написания одной команды склеиваются (реальный кейс Dota)", () => {
+  // Dota Esports World Cup был в ОБОИХ плечах фида, но пересечение 0: «Team Yandex»≠«Yandex» по точным именам
+  assert.equal(bc.teamKey("Team Yandex"), bc.teamKey("Yandex"));
+  assert.equal(bc.teamKey("LGD Gaming"), bc.teamKey("LGD"));
+  assert.equal(bc.teamKey("Virtus.Pro"), bc.teamKey("Virtus.pro"));
+  assert.equal(bc.teamKey("Sporting CP (Kray) (Esports)"), bc.teamKey("Sporting CP")); // скобочные ники — вон
+  assert.notEqual(bc.teamKey("Team Spirit"), bc.teamKey("Team Falcons"));              // разные команды не слипаются
+  assert.equal(bc.teamKey("Team"), bc.norm("Team")); // всё съела чистка → откат к полному norm (не пустой ключ)
+  const B = { g1: { team1NameEn: "Team Yandex", team2NameEn: "Team OG", textId: "/B/1" } };
+  const P = { g9: { team1NameEn: "Yandex", team2NameEn: "OG", textId: "/P/9" } };
+  const m = bc.matchEvents(B, P);
+  assert.equal(m.length, 1); // матч склеился, value теперь считается
+  // flip: порядок команд совпал → false (teamKey, а не сырой norm — иначе «Team Yandex»≠«Yandex» давал бы ложный flip)
+  assert.equal(bc.eventSync(B.g1, P.g9).flip, false);
+});
+
 test("devig2: снимает маржу, сумма вероятностей 1", () => {
   const [a, b] = bc.devig2(1.5, 2.5);
   assert.ok(near(a + b, 1));

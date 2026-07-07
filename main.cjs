@@ -960,6 +960,28 @@ async function captureBetslip(win, cfg, accepted) {
   } catch (_) { /* ignore */ }
 }
 
+// READ-BACK v2: список ЖИВЫХ ставок купона Betano — строки «Bet <stake> € Potential winnings <W> €»
+// (разметка снята с боевых квитанций). Potential winnings у принятой ставки ФИКСИРОВАН → стабильный ключ.
+// Сравнение мультисетов ДО/ПОСЛЕ клика даёт ПОЗИТИВНОЕ доказательство приёма (появилась НОВАЯ строка с нашей
+// суммой) и РЕАЛЬНЫЙ принятый кэф (W/stake). Признак «поле суммы исчезло» (v1) давал ложные минусы: Betano
+// принимала, а бот писал «не поставлено» (доказано логами 2026-07-07: 3,74=2×1.87 и 6,90=2×3.45 висели с CASH OUT).
+const SLIP_BETS_JS = `(() => {
+  const out = [];
+  const re = /Bet\\s*([\\d.,]+)\\s*€\\s*Potential winnings\\s*([\\d.,]+)\\s*€/gi;
+  const t = (document.body && document.body.innerText) || "";
+  let m; while ((m = re.exec(t))) out.push(m[1] + "|" + m[2]);
+  return out;
+})()`;
+async function readSlipBets(win) {
+  try { return (await win.webContents.executeJavaScript(SLIP_BETS_JS)) || []; } catch { return []; }
+}
+// PURE-ish: строки after, которых не было в before (мультисет-разность — дубли учитываются по счёту).
+function newSlipBets(before, after) {
+  const cnt = {};
+  for (const k of before) cnt[k] = (cnt[k] || 0) + 1;
+  return after.filter((k) => { if (cnt[k]) { cnt[k]--; return false; } return true; });
+}
+
 // Проверка, что ставка ПРИНЯТА конторой. НАДЁЖНЫЙ признак = ПОЛЕ СУММЫ купона (cfg.stake) ИСЧЕЗЛО:
 // принятая ставка уводит купон в чек/квитанцию (поля суммы больше нет), отклонённая/переоценённая
 // оставляет выбор висеть (поле суммы на месте). Кнопка постановки как признак НЕнадёжна (мигает при
@@ -1014,11 +1036,31 @@ async function placeBet(id, stake, live = false, opts = {}) {
   if (!verdict.ok) { r.verifyReason = verdict.reason; logger.log("WARN", "  [судья] ВЫБОР ≠ СИГНАЛ: " + verdict.reason); }
   else if (!verdict.skip) logger.log("INFO", "  [судья] выбор совпал с сигналом ✓");
   if (live && r.hasPlaceBtn && s.oddsOk !== false && slipOddsOk !== false && verdict.ok) {
+    // #4 READ-BACK v2: снимок живых ставок купона ДО клика → клик → ждём ПОЯВЛЕНИЯ новой строки
+    // «Bet <наша сумма> € Potential winnings <W> €». Появилась = ПРИНЯТО (позитивное доказательство от самой
+    // Betano) + реальный кэф W/stake. v1 («поле суммы исчезло») давал ложные минусы — принятые ставки
+    // числились непоставленными (нет ТГ, врут счётчики/лимиты/P&L).
+    const before = await readSlipBets(s.win);
     await clickPlace(s.win, s.cfg);
-    // #4: ПОДТВЕРЖДЕНИЕ ПРИЁМА — перечитать страницу (кнопка постановки исчезла = принято). Не подтвердил → НЕ считаем поставленным.
-    const accepted = await verifyPlaced(s.win, s.cfg);
-    r.placed = accepted;
-    if (!accepted) { r.error = "БК не подтвердила приём ставки (verifyPlaced)"; logger.log("ERROR", "🔴 [value] боевой клик, но приём НЕ подтверждён — считаем НЕ поставлено, проверь купон вручную"); }
+    let confirmed = null;
+    for (let i = 0; i < 12 && !confirmed; i++) {
+      await sleep(500);
+      const fresh = newSlipBets(before, await readSlipBets(s.win))
+        .map((k) => k.split("|").map(parseMoney))
+        .filter(([st, w]) => st != null && w != null && Math.abs(st - Number(stake)) < 0.011);
+      if (fresh.length) confirmed = fresh[0];
+    }
+    r.placed = !!confirmed;
+    if (confirmed) {
+      r.realOdds = Math.round((confirmed[1] / confirmed[0]) * 1000) / 1000;
+      logger.log("INFO", "  [квитанция] ставка ПОДТВЕРЖДЕНА Betano: Bet " + confirmed[0] + "€ → winnings " + confirmed[1] + "€ (реальный кэф " + r.realOdds + ")");
+      if (r.realOdds && r.selectedOdds && Math.abs(r.realOdds - r.selectedOdds) / r.selectedOdds > 0.005)
+        logger.log("WARN", "  [квитанция] реальный кэф " + r.realOdds + " ≠ кэфу выбора " + r.selectedOdds + " (приняли по другому)");
+    } else {
+      r.error = "квитанция не подтвердила приём (новая строка ставки не появилась)";
+      logger.log("ERROR", "🔴 [value] боевой клик, но квитанция НЕ подтвердила ставку — считаем НЕ поставлено, проверь купон/историю вручную");
+    }
+    await captureBetslip(s.win, s.cfg, r.placed); // диаг-снимок квитанции — продолжаем собирать разметку
   }
   else if (live && r.hasPlaceBtn && s.oddsOk !== false && verdict.ok && slipOddsOk === false) {
     // (A) цена купона (BET NOW) уехала ниже допуска → НЕ ставим (реальный кэф хуже сигнала)
@@ -1556,7 +1598,7 @@ async function tryPlaceFromValueSignals(sigs) {
     valuePlaced.push(c.key); // пробовали — учитываем в лимитах (дубли/матч/маркет); дедуп исхода = дубли-лимит
     // Пометка способа выбора (для отдельной статы): how=name/desc/id/fav; fav = БЕЗЫМЯННАЯ фора, привязана по фавориту.
     const howTag = res && res.how ? " [how=" + res.how + (res.how === "fav" ? " #безымянная-фора(по фавориту)" : "") + "]" : "";
-    if (res && res.placed) { valuePlaceCount++; markValuePlaced(c.key); logger.log("INFO", "[value] ✅ ПОСТАВЛЕНО: " + (res.selected || c.desc) + " @" + (res.selectedOdds || c.expectedOdds) + howTag); }
+    if (res && res.placed) { valuePlaceCount++; markValuePlaced(c.key); logger.log("INFO", "[value] ✅ ПОСТАВЛЕНО: " + (res.selected || c.desc) + " @" + (res.realOdds || res.selectedOdds || c.expectedOdds) + howTag); }
     else if (res && res.selected) {
       // Выбрал, но НЕ поставил — показываем ПОЧЕМУ (иначе «dry-run» путает в боевом). Ранний гейт = купон не открывали.
       const early = res.error && /купон не открывали/.test(res.error);
@@ -1570,7 +1612,7 @@ async function tryPlaceFromValueSignals(sigs) {
     else logger.log("WARN", "[value] простановка не прошла: " + ((res && res.error) || "исход не выбран"));
     // Telegram-АЛЕРТ в реальном времени (чтобы не читать логи): боевая ставка ИЛИ судья заблокировал (в боевом).
     if (settings.tgToken && settings.tgChat) {
-      if (res && res.placed) tg("✅ <b>VALUE поставлено</b>\n" + escHtml((c.t1 || "?") + " vs " + (c.t2 || "?")) + "\n" + escHtml(c.desc + " @" + (res.selectedOdds || c.expectedOdds)) + " · value +" + ((c.value || 0) * 100).toFixed(1) + "%").catch(() => {});
+      if (res && res.placed) tg("✅ <b>VALUE поставлено</b>\n" + escHtml((c.t1 || "?") + " vs " + (c.t2 || "?")) + "\n" + escHtml(c.desc + " @" + (res.realOdds || res.selectedOdds || c.expectedOdds)) + " · value +" + ((c.value || 0) * 100).toFixed(1) + "%").catch(() => {});
       else if (live && res && res.verifyReason) tg("🛑 <b>Судья отклонил ставку</b>\n" + escHtml((c.t1 || "?") + " vs " + (c.t2 || "?")) + "\n" + escHtml("сигнал: " + c.desc) + "\n" + escHtml(res.verifyReason)).catch(() => {});
     }
     // ПАУЗА между попытками (держим valuePlaceBusy → следующая не стартует): успех — 10с, отказ — 3с. Купон уже
