@@ -32,6 +32,40 @@ test("teamKey/matchEvents: разные написания одной коман
   assert.equal(bc.eventSync(B.g1, P.g9).flip, false);
 });
 
+test("teamKey: мировой бейсбол — US-алиасы городов, латам-предлоги/порядок слов, KBO-бренды целы", () => {
+  // США: аббревиатуры городов
+  assert.equal(bc.teamKey("LA Angels"), bc.teamKey("Los Angeles Angels"));
+  assert.equal(bc.teamKey("NY Yankees"), bc.teamKey("New York Yankees"));
+  assert.equal(bc.teamKey("St. Louis Cardinals"), bc.teamKey("Saint Louis Cardinals"));
+  assert.notEqual(bc.teamKey("Red Sox"), bc.teamKey("White Sox")); // ники не слипаются
+  // Латам: предлоги + порядок слов
+  assert.equal(bc.teamKey("Diablos Rojos del México"), bc.teamKey("Mexico Diablos Rojos"));
+  assert.equal(bc.teamKey("Tigres del Licey"), bc.teamKey("Licey Tigres"));
+  // KBO: бренд-буквы различают команды — не режем
+  assert.notEqual(bc.teamKey("LG Twins"), bc.teamKey("KT Twins"));
+});
+
+test("matchEvents: SUBSET-фолбэк (NPB-префикс региона) — склейка ЕДИНСТВЕННОГО кандидата, отказ при двух", () => {
+  // Fukuoka SoftBank Hawks ↔ SoftBank Hawks: точный ключ не совпал, но токены ⊆ → склейка (кандидат один)
+  const B = {
+    g1: { team1NameEn: "Fukuoka SoftBank Hawks", team2NameEn: "Hokkaido Nippon-Ham Fighters", textId: "/B/1" },
+  };
+  const P = {
+    g9: { team1NameEn: "SoftBank Hawks", team2NameEn: "Nippon-Ham Fighters", textId: "/P/9" },
+  };
+  const m = bc.matchEvents(B, P);
+  assert.equal(m.length, 1);
+  assert.equal(m[0].p.textId, "/P/9");
+  assert.equal(bc.eventSync(B.g1, P.g9).flip, false); // sameTeam subset-осведомлён → flip не врёт
+  // ДВА кандидата «Giants» → отказ (не гадаем, какой матч склеивать)
+  const B2 = { g1: { team1NameEn: "Giants", team2NameEn: "Tigers", textId: "/B/1" } };
+  const P2 = {
+    g8: { team1NameEn: "Yomiuri Giants", team2NameEn: "Hanshin Tigers", textId: "/P/8" },
+    g9: { team1NameEn: "Lotte Giants", team2NameEn: "Kia Tigers", textId: "/P/9" },
+  };
+  assert.equal(bc.matchEvents(B2, P2).length, 0);
+});
+
 test("devig2: снимает маржу, сумма вероятностей 1", () => {
   const [a, b] = bc.devig2(1.5, 2.5);
   assert.ok(near(a + b, 1));
