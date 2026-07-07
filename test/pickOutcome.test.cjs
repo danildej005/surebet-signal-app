@@ -562,6 +562,30 @@ test("ML: агрегат «N+» (25+/35+) НЕ выбирается как по�
   assert.ok(r && /Alejandro/.test(r.text), "должен взять Alejandro (side 2), не «25+»; взял: " + (r && r.text));
 });
 
+// ── ПРЯМОЙ id Betano (data-selnid == id исхода из фида; связка доказана боевым замером 0.10.25) ──
+test("selnid: кликаем РОВНО кнопку с нашим id — даже если по кэфу «ближе» другая", () => {
+  const btns = [
+    { i: 0, id: "", selnid: "9950561590", text: "Alice Tubello 2.02" },          // Game Winner — кэфточь-в-точь
+    { i: 1, id: "", selnid: "9950561592", text: "Alice Tubello 2.10" },          // НАШ id (Winner матча)
+    { i: 2, id: "", selnid: "9950561593", text: "Yufei Ren 1.75" },
+  ];
+  const r = pickOutcome({ desc: "1", expectedOdds: 2.02, buttons: btns, selnid: "9950561592" });
+  assert.ok(r, "должен найти по id");
+  assert.strictEqual(r.i, 1);                    // взял кнопку по id, а не «ближайший кэф» (i=0)
+  assert.strictEqual(r.how, "selnid");
+});
+test("selnid: id есть, кнопки нет → null (исход снят; текстовый фолбэк НЕ делаем — он и давал мис-селекты)", () => {
+  const btns = [
+    { i: 0, id: "", selnid: "111", text: "Alice Tubello 2.02" },
+    { i: 1, id: "", selnid: "222", text: "Yufei Ren 1.75" },
+  ];
+  assert.strictEqual(pickOutcome({ desc: "1", expectedOdds: 2.02, buttons: btns, selnid: "999" }), null);
+});
+test("selnid НЕ передан → старое поведение (текстовый матчинг работает как раньше)", () => {
+  const r = pickOutcome({ desc: "Ф2(-1.5)", expectedOdds: 1.82, buttons: BET, eventUrl: SLUG_T });
+  assert.strictEqual(r.text, "Nick Kyrgios -1.5 1.82");
+});
+
 test("ML: гейм-проп «to win to N» НЕ выбирается как победитель (мисселект Palosi из лога)", () => {
   const URL = "https://www.betano.bg/en/match-odds/stefan-palosi-zdenek-kolar/999/"; // player1 = Stefan Palosi
   // есть чистый победитель И гейм-проп, у пропа кэф БЛИЖЕ к ожидаемому — всё равно берём чистого победителя

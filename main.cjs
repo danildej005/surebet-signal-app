@@ -702,24 +702,35 @@ async function selectLegOutcome(id, opts = {}) {
       } catch { /* ignore */ }
     }
     let eventUrl = ""; try { eventUrl = win.webContents.getURL(); } catch { /* ignore */ }
-    // ЗАМЕР СВЯЗКИ id: гипотеза «eventId фида (перв. часть) == data-selnid кнопки». Если подтвердится —
-    // переводим выбор на ПРЯМОЙ клик по id (без матчинга по кэфу/имени) → мис-селекты рынков умирают в корне.
-    // Ищем метку «selnid-замер» в логе: ✅ СХЕМА РАБОТАЕТ = id найден среди кнопок (+совпал ли с выбором бота).
-    if (id === "betano" && bet.betanoSelId) {
+    // ПРЯМОЙ id (связка ДОКАЗАНА замером 0.10.25, BACKLOG §0e): кнопку выбирает pickOutcome по data-selnid ==
+    // id исхода из фида. Если id не найден среди кнопок — ЗАМЕР «спрятанной кнопки»: React Betano не рендерит
+    // содержимое СВЁРНУТЫХ секций → раскрываем все [aria-expanded=false] и перечитываем кнопки. Вердикт в лог:
+    // «НАЙДЕН после раскрытия» (кнопка пряталась → ставим) / «не найден даже после раскрытия» (линия снята → пропуск).
+    if (id === "betano" && bet.betanoSelId && !buttons.some((b) => b.selnid && b.selnid === String(bet.betanoSelId))) {
+      let opened = 0;
       try {
-        const hit = buttons.find((b) => b.selnid && b.selnid === String(bet.betanoSelId));
-        if (hit) logger.log("INFO", "  [selnid-замер] ✅ СХЕМА РАБОТАЕТ: id фида " + bet.betanoSelId + " найден среди кнопок → «" + hit.text + "» (i=" + hit.i + "). ЗАФИКСИРОВАТЬ: переводим выбор на прямой id");
-        else logger.log("INFO", "  [selnid-замер] ✖ id фида " + bet.betanoSelId + " НЕ найден среди " + buttons.length + " кнопок (selnid-примеры: " + buttons.slice(0, 3).map((b) => b.selnid || "-").join(",") + ")");
+        opened = await win.webContents.executeJavaScript(`(() => {
+          let n = 0;
+          for (const e of document.querySelectorAll('[aria-expanded="false"]')) {
+            const t = (e.innerText || "").trim();
+            if (e.offsetParent !== null && t && t.length < 60) { try { e.click(); n++; } catch (_) {} }
+            if (n >= 30) break;
+          }
+          return n;
+        })()`);
       } catch { /* ignore */ }
+      if (opened) {
+        await sleep(1500);
+        try {
+          buttons = await win.webContents.executeJavaScript(`(() => { const norm = (s) => (s || "").replace(/\\s+/g, " ").trim(); return [...document.querySelectorAll(${JSON.stringify(sel)})].map((el, i) => ({ i, id: el.id || "", selnid: el.getAttribute("data-selnid") || "", text: norm(el.innerText) })); })()`);
+        } catch { /* ignore */ }
+      }
+      const found = buttons.some((b) => b.selnid && b.selnid === String(bet.betanoSelId));
+      logger.log("INFO", "  [selnid] id " + bet.betanoSelId + (found
+        ? " НАЙДЕН после раскрытия " + opened + " свёрнутых секций (кнопка пряталась) ✅"
+        : " не найден даже после раскрытия " + opened + " секций → исход снят/пересоздан, пропуск"));
     }
-    const choice = pickOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons, eventUrl, unit, subject: bet.subject || extractSubject(bet.descFull) });
-    // хвост замера: совпал ли ВЫБОР бота с кнопкой по id (если оба есть)
-    if (id === "betano" && bet.betanoSelId && choice) {
-      try {
-        const byId = buttons.find((b) => b.selnid && b.selnid === String(bet.betanoSelId));
-        if (byId) logger.log("INFO", "  [selnid-замер] выбор бота i=" + choice.i + (byId.i === choice.i ? " == id-кнопке ✓" : " ≠ id-кнопке i=" + byId.i + " ⚠️ (бот выбрал бы НЕ ТО — id спас бы)"));
-      } catch { /* ignore */ }
-    }
+    const choice = pickOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons, eventUrl, unit, subject: bet.subject || extractSubject(bet.descFull), selnid: (id === "betano" && bet.betanoSelId) || "" });
     if (!choice) {
       // ДИАГНОСТИКА доп-рынков: дампим реальные подписи кнопок, что бот видел — чтобы потом
       // прицельно научить pickOutcome этим рынкам (карточки/угловые/сет-тайм/DNB/esports и т.п.).
