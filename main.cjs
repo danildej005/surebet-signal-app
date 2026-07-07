@@ -15,7 +15,7 @@ const settingsStore = require("./lib/settings.cjs");
 const { defaultBookers, emptyProxy, buildProxyString, betanoTarget, localizeBetanoUrl, betanoCategoryFor, sameSideSelected, randomFingerprint, randomUA, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, verifyPick, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 const fx = require("./lib/fx.cjs");
-const { parseMoney, vilkaStakes } = require("./lib/vilka.cjs");
+const { parseMoney, vilkaStakes, slipOddsFromBtn } = require("./lib/vilka.cjs");
 const { scanAll } = require("./lib/valuescanner.cjs"); // value-режим: мультиспорт-сканер (эталон ps3838 / oddspapi)
 const oddsapi = require("./lib/oddspapi.cjs"); // клиент oddspapi (для списка лиг в панели)
 const octo = require("./lib/octo.cjs"); // Octo Browser (антидетект по API) — простановка на Betano вместо Electron-окна
@@ -462,7 +462,7 @@ const BETSLIP = {
   betano: { outcomeSel: ".selections__selection", stake: 'input[id^="stakeInput"]', placeWords: ["BET NOW"], confirmSel: null, clearSel: null },
   pinnacle: { outcomeSel: '[id*="|"]', stake: 'input[name="stake"]', placeWords: ["CONFIRM", "SINGLE BET"], confirmSel: ".confirm-bet-modal-btn-ok", clearSel: '[class*="CloseStyled"]' },
 };
-const ODDS_TOLERANCE = 0.05; // допустимое падение кэфа (5%)
+const ODDS_TOLERANCE = 0.015; // допустимое падение кэфа (1.5%) — гейтим и кнопку исхода, и цену купона (BET NOW)
 
 // Чтение максимума ставки из купона (в валюте конторы: Pinnacle USDT≈USD, Betano EUR).
 // Pinnacle печатает «Max bet USDT 10,035.00» под полем суммы — читаем текст.
@@ -679,9 +679,11 @@ async function selectLegOutcome(id, opts = {}) {
     }
     let buttons = [];
     try {
+      // selnid = data-selnid Betano (id ВЫБОРА). Гипотеза: он же — первая часть eventId в фиде bettingco →
+      // прямая связка «сигнал→кнопка» БЕЗ угадывания по кэфу/имени (закрывает мис-селекты рынков в корне).
       buttons = await win.webContents.executeJavaScript(`(() => {
         const norm = (s) => (s || "").replace(/\\s+/g, " ").trim();
-        return [...document.querySelectorAll(${JSON.stringify(sel)})].map((el, i) => ({ i, id: el.id || "", text: norm(el.innerText) }));
+        return [...document.querySelectorAll(${JSON.stringify(sel)})].map((el, i) => ({ i, id: el.id || "", selnid: el.getAttribute("data-selnid") || "", text: norm(el.innerText) }));
       })()`);
     } catch (e) { return { ok: false, win, cfg, bet, error: "не прочитал кнопки исходов: " + e.message }; }
     // Ретрай при ПУСТОЙ странице: навигация иногда таймаутит (Octo goto timeout) → 0 кнопок исходов. Перезагружаем,
@@ -696,11 +698,28 @@ async function selectLegOutcome(id, opts = {}) {
       }
       await dismissConsent(win);
       try {
-        buttons = await win.webContents.executeJavaScript(`(() => { const norm = (s) => (s || "").replace(/\\s+/g, " ").trim(); return [...document.querySelectorAll(${JSON.stringify(sel)})].map((el, i) => ({ i, id: el.id || "", text: norm(el.innerText) })); })()`);
+        buttons = await win.webContents.executeJavaScript(`(() => { const norm = (s) => (s || "").replace(/\\s+/g, " ").trim(); return [...document.querySelectorAll(${JSON.stringify(sel)})].map((el, i) => ({ i, id: el.id || "", selnid: el.getAttribute("data-selnid") || "", text: norm(el.innerText) })); })()`);
       } catch { /* ignore */ }
     }
     let eventUrl = ""; try { eventUrl = win.webContents.getURL(); } catch { /* ignore */ }
+    // ЗАМЕР СВЯЗКИ id: гипотеза «eventId фида (перв. часть) == data-selnid кнопки». Если подтвердится —
+    // переводим выбор на ПРЯМОЙ клик по id (без матчинга по кэфу/имени) → мис-селекты рынков умирают в корне.
+    // Ищем метку «selnid-замер» в логе: ✅ СХЕМА РАБОТАЕТ = id найден среди кнопок (+совпал ли с выбором бота).
+    if (id === "betano" && bet.betanoSelId) {
+      try {
+        const hit = buttons.find((b) => b.selnid && b.selnid === String(bet.betanoSelId));
+        if (hit) logger.log("INFO", "  [selnid-замер] ✅ СХЕМА РАБОТАЕТ: id фида " + bet.betanoSelId + " найден среди кнопок → «" + hit.text + "» (i=" + hit.i + "). ЗАФИКСИРОВАТЬ: переводим выбор на прямой id");
+        else logger.log("INFO", "  [selnid-замер] ✖ id фида " + bet.betanoSelId + " НЕ найден среди " + buttons.length + " кнопок (selnid-примеры: " + buttons.slice(0, 3).map((b) => b.selnid || "-").join(",") + ")");
+      } catch { /* ignore */ }
+    }
     const choice = pickOutcome({ desc: bet.desc, expectedOdds: bet.expectedOdds, outcomeId: bet.outcomeId, buttons, eventUrl, unit, subject: bet.subject || extractSubject(bet.descFull) });
+    // хвост замера: совпал ли ВЫБОР бота с кнопкой по id (если оба есть)
+    if (id === "betano" && bet.betanoSelId && choice) {
+      try {
+        const byId = buttons.find((b) => b.selnid && b.selnid === String(bet.betanoSelId));
+        if (byId) logger.log("INFO", "  [selnid-замер] выбор бота i=" + choice.i + (byId.i === choice.i ? " == id-кнопке ✓" : " ≠ id-кнопке i=" + byId.i + " ⚠️ (бот выбрал бы НЕ ТО — id спас бы)"));
+      } catch { /* ignore */ }
+    }
     if (!choice) {
       // ДИАГНОСТИКА доп-рынков: дампим реальные подписи кнопок, что бот видел — чтобы потом
       // прицельно научить pickOutcome этим рынкам (карточки/угловые/сет-тайм/DNB/esports и т.п.).
@@ -871,7 +890,15 @@ async function fillStakeOnly(win, cfg, stake) {
     await SLEEP(800);
     const words = ${JSON.stringify(cfg.placeWords)};
     const pbtn = [...document.querySelectorAll("button")].find((b) => { const t = (b.innerText || "").toUpperCase(); return words.every((w) => t.includes(w.toUpperCase())); });
-    return { ok: true, stakeValue: inp.value, placeBtnText: pbtn ? (pbtn.innerText || "").replace(/\\s+/g, " ").trim() : null, hasPlaceBtn: !!pbtn };
+    // ЯРЛЫК РЫНКА из купона (наземная правда Betano): строка ставки вокруг поля суммы содержит «Player — Market — кэф»
+    // (напр. «Alice Tubello — Game Winner (Set 2, Game 10) — 2.02»). По ней судья потом отличит рынок от намерения сигнала.
+    let slipText = "";
+    try {
+      let box = inp;
+      for (let i = 0; i < 8 && box; i++) { const cls = (typeof box.className === "string" ? box.className : ""); if (/slip|bet|coupon|ticket|selection/i.test(cls)) break; box = box.parentElement; }
+      slipText = (((box || inp.parentElement) || {}).innerText || "").replace(/\\s+/g, " ").trim().slice(0, 300);
+    } catch (e) { /* ignore */ }
+    return { ok: true, stakeValue: inp.value, placeBtnText: pbtn ? (pbtn.innerText || "").replace(/\\s+/g, " ").trim() : null, hasPlaceBtn: !!pbtn, slipText };
   })()`;
   try { return await win.webContents.executeJavaScript(js); }
   catch (e) { return { error: e.message }; }
@@ -959,6 +986,15 @@ async function placeBet(id, stake, live = false, opts = {}) {
   const r = { ...f, selected: s.selected, selectedOdds: s.selectedOdds, how: s.how, maxStake: s.maxStake, expectedOdds: s.expectedOdds, oddsOk: s.oddsOk, selectedIndex: s.selectedIndex };
   if (r.error) { r.ok = false; logger.log("WARN", "dry-run/place", id, JSON.stringify(r)); return r; }
   r.placed = false;
+  // САМО-ДЕТЕКЦИЯ (шаг 1): ярлык рынка из купона Betano в лог — наземная правда, по ней шаг 2 отличит рынок от намерения.
+  if (r.slipText) logger.log("INFO", "  [диаг купон: рынок] " + JSON.stringify(r.slipText));
+  // (A) РЕАЛЬНАЯ ЦЕНА КУПОНА: кэф из кнопки BET NOW (Potential winnings ÷ ставку) — то, по чему ставка РЕАЛЬНО
+  // встанет. Кнопка исхода (oddsOk) могла показывать выше, а к купону кэф уехал. Гейтим ИМЕННО эту цену.
+  const slipOdds = slipOddsFromBtn(r.placeBtnText, stake);
+  r.slipOdds = slipOdds;
+  const expOdds = Number(s.expectedOdds) || null;
+  const slipOddsOk = (slipOdds && expOdds) ? (slipOdds >= expOdds * (1 - ODDS_TOLERANCE)) : null; // null = цену купона не прочитать → не блокируем (кнопку исхода уже проверили)
+  r.slipOddsOk = slipOddsOk;
   // НЕЗАВИСИМЫЙ СУДЬЯ: сверить ВЫБОР с СИГНАЛОМ (тип/линия/сторона/кэф, без экспрессов). Не совпало → в боевом
   // НЕ ставим и пишем причину; в dry-run логируем вердикт (видно, что судья работает, до боевого). skip = нечем сверять.
   const bet = s.bet || {};
@@ -966,12 +1002,17 @@ async function placeBet(id, stake, live = false, opts = {}) {
   r.verified = verdict.ok;
   if (!verdict.ok) { r.verifyReason = verdict.reason; logger.log("WARN", "  [судья] ВЫБОР ≠ СИГНАЛ: " + verdict.reason); }
   else if (!verdict.skip) logger.log("INFO", "  [судья] выбор совпал с сигналом ✓");
-  if (live && r.hasPlaceBtn && s.oddsOk !== false && verdict.ok) {
+  if (live && r.hasPlaceBtn && s.oddsOk !== false && slipOddsOk !== false && verdict.ok) {
     await clickPlace(s.win, s.cfg);
     // #4: ПОДТВЕРЖДЕНИЕ ПРИЁМА — перечитать страницу (кнопка постановки исчезла = принято). Не подтвердил → НЕ считаем поставленным.
     const accepted = await verifyPlaced(s.win, s.cfg);
     r.placed = accepted;
     if (!accepted) { r.error = "БК не подтвердила приём ставки (verifyPlaced)"; logger.log("ERROR", "🔴 [value] боевой клик, но приём НЕ подтверждён — считаем НЕ поставлено, проверь купон вручную"); }
+  }
+  else if (live && r.hasPlaceBtn && s.oddsOk !== false && verdict.ok && slipOddsOk === false) {
+    // (A) цена купона (BET NOW) уехала ниже допуска → НЕ ставим (реальный кэф хуже сигнала)
+    r.error = "кэф в купоне уехал: " + slipOdds.toFixed(2) + " < ожид " + expOdds + " (допуск " + (ODDS_TOLERANCE * 100) + "%)";
+    logger.log("WARN", "  [value] пропуск (кэф купона уехал): " + r.error);
   }
   else if (live && r.hasPlaceBtn && s.oddsOk !== false && !verdict.ok) r.error = "судья заблокировал: " + verdict.reason;
   logger.log("INFO", live ? "PLACE" : "dry-run", id, JSON.stringify(r));
@@ -1621,7 +1662,7 @@ async function runValueCycle(c, live) {
   if (!booker) return { ok: false, error: "контора betano не настроена" };
   // Поля сигнала (kind/side/param/st/t1/t2) — для НЕЗАВИСИМОГО судьи verifyPick перед боевым кликом.
   pendingBet.set("betano", { outcomeId: c.outcomeId, expectedOdds: c.expectedOdds, desc: c.desc, descFull: c.descFull || c.subject || c.desc, subject: c.subject,
-    kind: c.kind, side: c.side, param: c.param, st: c.st, t1: c.t1, t2: c.t2 });
+    kind: c.kind, side: c.side, param: c.param, st: c.st, t1: c.t1, t2: c.t2, betanoSelId: c.betanoSelId || "" });
   // Octo-режим: антидетект/прокси/логин — внутри Octo-профиля, открываем betano.bg в Octo-странице.
   // Иначе — наш Electron-антидетект (запасной путь). Адаптер кладётся в octoWins → placeBet берёт его через bookerWin.
   if (settings.octoMode) {
