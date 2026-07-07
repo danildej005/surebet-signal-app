@@ -295,18 +295,29 @@ async function openOctoBooker(profile, overrideUrl) {
     octoWins.set(id, win);
     try { r.browser.on("disconnected", () => { octoWins.delete(id); logger.log("INFO", "Octo: соединение разорвано", id); }); } catch { /* ignore */ }
     // ЭКОНОМИЯ ПРОКСИ-ТРАФИКА: режем тяжёлое косметическое (картинки/видео-стримы/шрифты). Нам нужен только DOM с
-    // кэфами — script/xhr/fetch/document/stylesheet НЕ трогаем (иначе рынки/вёрстка не прогрузятся). Ставим ОДИН раз
-    // на страницу до первой навигации → действует и на keep-alive перезагрузки, и на открытие событий.
+    // кэфами — script/xhr/fetch/document/stylesheet к САМОМУ Betano НЕ трогаем (иначе рынки/вёрстка не прогрузятся).
+    // ВАЖНО: live-видео идёт HLS/DASH-стримом (.m3u8/.ts/.m4s/.mp4) с типом xhr/fetch, а НЕ media → по типу не
+    // ловится. Поэтому дополнительно режем по URL-расширению (видео/аудио/картинки) и хостам аналитики/рекламы/
+    // трекеров/видео-провайдеров. Ставим ОДИН раз на страницу до первой навигации → действует и на keep-alive, и на события.
     try {
       const page = win.page;
       if (page && !win.__resBlock && settings.octoBlockResources !== false) {
         win.__resBlock = true;
+        // тяжёлые расширения (в т.ч. HLS/DASH-сегменты и манифесты) — с любым query-хвостом
+        const BLOCK_EXT = /\.(m3u8|mpd|ts|m4s|mp4|m4v|mov|webm|ogv|mp3|m4a|aac|ogg|jpe?g|png|gif|svg|webp|avif|ico|bmp|woff2?|ttf|otf|eot)(\?|#|$)/i;
+        // ТОЛЬКО чистые аналитика/реклама/трекинг/сессионные-реплеи — к кэфам Betano отношения не имеют (нулевой риск).
+        // Провайдеров спорт-ДАННЫХ (sportradar/betradar/genius…) и consent (onetrust) НЕ режем: могут нести кэфы/ломать
+        // рендер рынков. Их видео и так рубится по расширению (.m3u8/.ts…). Если видео утечёт — добавим хост точечно по логу.
+        const BLOCK_HOST = /(google-analytics|googletagmanager|googlesyndication|doubleclick|facebook\.|fbcdn|connect\.facebook|hotjar|optimizely|mouseflow|fullstory|clarity\.ms|sentry\.|bugsnag|segment\.io|braze|criteo|taboola|outbrain|adnxs|adsrvr|scorecardresearch|quantserve)/i;
         await page.setRequestInterception(true);
         page.on("request", (req) => {
-          try { const t = req.resourceType(); if (t === "image" || t === "media" || t === "font") req.abort().catch(() => {}); else req.continue().catch(() => {}); }
-          catch { try { req.continue(); } catch { /* ignore */ } }
+          try {
+            const t = req.resourceType(); const u = req.url();
+            if (t === "image" || t === "media" || t === "font" || BLOCK_EXT.test(u) || BLOCK_HOST.test(u)) req.abort().catch(() => {});
+            else req.continue().catch(() => {});
+          } catch { try { req.continue(); } catch { /* ignore */ } }
         });
-        logger.log("INFO", "Octo: блок ресурсов ВКЛ (image/media/font) — экономия прокси-трафика");
+        logger.log("INFO", "Octo: блок ресурсов ВКЛ (image/media/font + видео-стримы .m3u8/.ts + аналитика/реклама) — экономия прокси-трафика");
       }
     } catch (e) { logger.log("WARN", "Octo блок ресурсов:", e && e.message); }
     logger.log("INFO", "Octo подключён:", id, "uuid:", String(settings.octoProfileId).slice(0, 8) + "…", "ws:", String(r.wsEndpoint).slice(0, 40));
