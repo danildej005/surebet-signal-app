@@ -562,6 +562,21 @@ test("ML: агрегат «N+» (25+/35+) НЕ выбирается как по�
   assert.ok(r && /Alejandro/.test(r.text), "должен взять Alejandro (side 2), не «25+»; взял: " + (r && r.text));
 });
 
+test("ML: гейм-проп «to win to N» НЕ выбирается как победитель (мисселект Palosi из лога)", () => {
+  const URL = "https://www.betano.bg/en/match-odds/stefan-palosi-zdenek-kolar/999/"; // player1 = Stefan Palosi
+  // есть чистый победитель И гейм-проп, у пропа кэф БЛИЖЕ к ожидаемому — всё равно берём чистого победителя
+  const btns = withIndex([
+    { text: "Stefan Palosi 2.40" },               // победитель 1 (наш) — кэф чуть дальше от 2.35
+    { text: "Zdenek Kolar 1.55" },                // победитель 2
+    { text: "Stefan Palosi to win to 15 2.32" },  // гейм-проп (выиграть гейм всухую) — кэф ближе, но НЕ победа
+  ]);
+  const r = pickOutcome({ desc: "1", expectedOdds: 2.35, buttons: btns, eventUrl: URL, subject: "Stefan Palosi" });
+  assert.ok(r && r.text === "Stefan Palosi 2.40", "должен взять чистого победителя, не «to win to»; взял: " + (r && r.text));
+  // только проп нашей стороны (плоского победителя нет) → отказ, НЕ проп
+  const onlyProp = withIndex([{ text: "Zdenek Kolar 1.55" }, { text: "Stefan Palosi to win to 15 2.32" }]);
+  assert.strictEqual(pickOutcome({ desc: "1", expectedOdds: 2.35, buttons: onlyProp, eventUrl: URL, subject: "Stefan Palosi" }), null);
+});
+
 test("ML: голый токен «3» НЕ обыгрывает именованного победителя по кэфу (мисселект «3 1.95»)", () => {
   const URL = "https://www.betano.bg/en/match-odds/andres-martin-jason-jung/999/"; // player1 = Andres
   const btns = withIndex([

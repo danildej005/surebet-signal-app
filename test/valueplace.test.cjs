@@ -101,6 +101,26 @@ test("choosePlacement: ДОП-В-МАТЧЕ (eventExtra) — 0 = 1 ставка 
   assert.equal(vp.choosePlacement([sml, stot], { minValue: 0.02, eventExtra: 1, marketExtra: 9 }, { placed }).candidate.market, "/Main/Main ML"); // +1 в матче → лучший (ML)
 });
 
+test("choosePlacement: ГАРД «обе стороны» — встречную сторону того же рынка НЕ берём (реальный баг Fritz+Bublik)", () => {
+  const event = "Guido Ivan Justo~Olle Wallin";
+  const loose = { minValue: 0.02, eventExtra: 9, marketExtra: 9, dupExtra: 9 }; // лимиты НЕ режут — проверяем именно гард
+  // ML: уже стоит победа стороны B → победу стороны A того же матча НЕ берём (одна точно проиграет)
+  const mlA = sig({ kind: "ML", side: "A", value: 0.06, market: "/Main/Main ML", st: "/Main/Main" });
+  assert.equal(vp.choosePlacement([mlA], loose, { placed: [event + "|/Main/Main ML|B"] }).skip, "нет подходящих");
+  // тот же матч, но ДРУГОЙ рынок (фора) — разрешён (гард только про встречную сторону ТОГО ЖЕ рынка)
+  const sprA = sig({ kind: "SPREAD", param: "-6.5", side: "A", value: 0.06, market: "/Main/Main/Game SPREAD -6.5", st: "/Main/Main/Game" });
+  assert.ok(vp.choosePlacement([sprA], loose, { placed: [event + "|/Main/Main ML|B"] }).candidate);
+  // TOTAL: Over↔Under ОДНОЙ линии — встречные (блок); РАЗНОЙ линии — ок
+  const overA = sig({ kind: "TOTAL", param: "27.5", side: "A", value: 0.06, market: "/Main/Main/Game TOTAL 27.5", st: "/Main/Main/Game" });
+  assert.equal(vp.choosePlacement([overA], loose, { placed: [event + "|/Main/Main/Game TOTAL 27.5|B"] }).skip, "нет подходящих");
+  const over305 = sig({ kind: "TOTAL", param: "30.5", side: "A", value: 0.06, market: "/Main/Main/Game TOTAL 30.5", st: "/Main/Main/Game" });
+  assert.ok(vp.choosePlacement([over305], loose, { placed: [event + "|/Main/Main/Game TOTAL 27.5|B"] }).candidate); // другая линия — не встречная
+  // SPREAD: +L и −L — встречные: стоит сторона B → сторону A той же линии НЕ берём
+  assert.equal(vp.choosePlacement([sprA], loose, { placed: [event + "|/Main/Main/Game SPREAD -6.5|B"] }).skip, "нет подходящих");
+  // та же сторона (A) уже стоит — гард НЕ мешает (это дубли-лимит, тут не блок)
+  assert.ok(vp.choosePlacement([mlA], loose, { placed: [event + "|/Main/Main ML|A"] }).candidate);
+});
+
 test("choosePlacement: ДОП-В-МАРКЕТЕ (marketExtra) — 0 = не две форы, но другой маркет матча ок", () => {
   const sSpread2 = sig({ kind: "SPREAD", param: "-2.5", side: "A", value: 0.08, market: "/Main/Main/Game SPREAD -2.5", st: "/Main/Main/Game" });
   const sTotal = sig({ kind: "TOTAL", param: "27.5", side: "A", value: 0.06, market: "/Main/Main/Game TOTAL 27.5", st: "/Main/Main/Game" });

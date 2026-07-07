@@ -891,23 +891,52 @@ async function clickPlace(win, cfg) {
   } catch { return false; }
 }
 
-// Проверка, что ставка ПРИНЯТА конторой: после успешной постановки кнопка постановки ИСЧЕЗАЕТ
-// (купон → чек/приём) и модалка подтверждения закрыта. Если кнопка осталась — НЕ принято.
-// Консервативно: не уверены = НЕ принято (лучше ложный стоп, чем незамеченная экспозиция).
-async function verifyPlaced(win, cfg) {
-  if (!win || win.isDestroyed() || !cfg) return false;
+// Снимок купона ПОСЛЕ клика — «учим» реальную разметку принятой ставки Betano (bg/en): текст квитанции
+// и кнопки постановки. По нему на след. шаге добьём чтение РЕАЛЬНОГО принятого кэфа (кейс: кэф уехал на
+// submit, приняли по 2.82, а мы записали 2.40). Пишем при каждом приёме/неприёме — ничего не меняет, только лог.
+async function captureBetslip(win, cfg, accepted) {
+  if (!win || win.isDestroyed() || !cfg) return;
   const js = `(() => {
-    const words = ${JSON.stringify(cfg.placeWords)};
-    const stillBtn = [...document.querySelectorAll("button")].some((b) => { const t = (b.innerText || "").toUpperCase(); return words.every((w) => t.includes(w.toUpperCase())); });
+    const rx = /bet placed|bet accepted|accepted|successfully|receipt|winnings|cash ?out|залог|прие[тм]|успеш|печалб|разписк/i;
+    const rc = [];
+    document.querySelectorAll("div,section,span,p,h1,h2,h3,strong").forEach((e) => {
+      const t = (e.innerText || "").replace(/\\s+/g, " ").trim();
+      if (t && t.length <= 120 && rx.test(t) && !rc.includes(t)) rc.push(t);
+    });
+    const words = ${JSON.stringify(cfg.placeWords || [])};
+    const btns = [...document.querySelectorAll("button")].map((b) => (b.innerText || "").replace(/\\s+/g, " ").trim())
+      .filter((t) => words.some((w) => t.toUpperCase().includes(w.toUpperCase()))).slice(0, 3);
+    return { receipt: rc.slice(0, 6), placeBtns: btns };
+  })()`;
+  try {
+    const snap = await win.webContents.executeJavaScript(js);
+    logger.log("INFO", "  [диаг купон после клика] принято=" + accepted + " " + JSON.stringify(snap));
+  } catch (_) { /* ignore */ }
+}
+
+// Проверка, что ставка ПРИНЯТА конторой. НАДЁЖНЫЙ признак = ПОЛЕ СУММЫ купона (cfg.stake) ИСЧЕЗЛО:
+// принятая ставка уводит купон в чек/квитанцию (поля суммы больше нет), отклонённая/переоценённая
+// оставляет выбор висеть (поле суммы на месте). Кнопка постановки как признак НЕнадёжна (мигает при
+// ре-рендере) → давала и ложный ПЛЮС (Jiri Under 33.5: кнопка мигнула → «поставлено», а ставки нет),
+// и ложный МИНУС (Eduardo −5.5, Under 41.5: приняли, а «не поставлено»). Признак «поле суммы» разворачивает
+// оба верно. Модалка подтверждения (если есть, напр. Pinnacle) тоже должна быть закрыта.
+async function verifyPlaced(win, cfg) {
+  if (!win || win.isDestroyed() || !cfg || !cfg.stake) return false;
+  const stateJs = `(() => {
+    const hasStake = !!document.querySelector(${JSON.stringify(cfg.stake)});
     const modal = ${cfg.confirmSel ? JSON.stringify(cfg.confirmSel) : "null"};
     const modalOpen = modal ? !!document.querySelector(modal) : false;
-    return !stillBtn && !modalOpen; // принято = кнопки постановки и модалки больше нет
+    return { hasStake, modalOpen };
   })()`;
+  let st = null;
   for (let i = 0; i < 10; i++) {
     await sleep(400);
-    try { if (await win.webContents.executeJavaScript(js)) return true; } catch (_) { /* ignore */ }
+    try { st = await win.webContents.executeJavaScript(stateJs); } catch (_) { continue; }
+    if (st && !st.hasStake && !st.modalOpen) break; // купон ушёл в квитанцию = принято
   }
-  return false;
+  const accepted = !!(st && !st.hasStake && !st.modalOpen);
+  await captureBetslip(win, cfg, accepted); // снимок квитанции/купона в лог для сверки с реальностью
+  return accepted;
 }
 
 // Простановка ОДНОГО плеча (IPC dry-run/place): выбор → сумма → (live) клик.

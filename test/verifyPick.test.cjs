@@ -30,6 +30,14 @@ test("ML: имя/токен стороны проходит; «3»/«N+»/чуж
   assert.equal(verifyPick(sig({ kind: "ML", side: "B", expectedOdds: 2.32 }), { text: "25+ 2.27", odds: 2.27 }).ok, false); // агрегат
   assert.equal(verifyPick(sig({ kind: "ML", side: "B", t1: "Luca Potenza", t2: "Lorenzo Angelini", expectedOdds: 2.87 }), { text: "Luca Potenza 2.92", odds: 2.92 }).ok, false); // чужой игрок (нужен Lorenzo)
   assert.equal(verifyPick(sig({ kind: "ML", side: "A", expectedOdds: 1.9 }), { text: "Over 18.5 1.90", odds: 1.9 }).ok, false); // тотал вместо победы
+  // гейм-проп «to win to N» (выиграть гейм всухую) — НЕ победа матча, хоть имя и кэф совпали (реальный баг Palosi)
+  assert.equal(verifyPick(sig({ kind: "ML", side: "A", t1: "Stefan Palosi", t2: "Zdenek Kolar", expectedOdds: 2.35 }), { text: "Stefan Palosi to win to 15 2.32", odds: 2.32, how: "name" }).ok, false);
+});
+
+test("TOTAL: условный тотал со счётом («… 3-0») — блок", () => {
+  // сигнал матчевого Under 41.5, а выбор — тотал, привязанный к счёту 3-0 (реальный баг Score 3-0)
+  assert.equal(verifyPick(sig({ kind: "TOTAL", side: "B", param: "41.5", expectedOdds: 2.12 }), { text: "Under 41.5 3-0 2.10", odds: 2.1 }).ok, false);
+  assert.equal(verifyPick(sig({ kind: "TOTAL", side: "B", param: "41.5", expectedOdds: 2.12 }), { text: "Under 41.5 2.10", odds: 2.1 }).ok, true); // чистый матчевый — проходит
 });
 
 test("Кэф грубо мимо / нет типа сигнала", () => {
