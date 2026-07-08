@@ -294,15 +294,15 @@ async function openOctoBooker(profile, overrideUrl) {
     win = r.win; win.__browser = r.browser;
     octoWins.set(id, win);
     try { r.browser.on("disconnected", () => { octoWins.delete(id); logger.log("INFO", "Octo: соединение разорвано", id); }); } catch { /* ignore */ }
-    // ЭКОНОМИЯ ПРОКСИ-ТРАФИКА v3 (возврат 0.10.31 по решению владельца): блокируем ТОЛЬКО live-видео/аудио-
-    // потоки через CDP setBlockedURLs — кэш ЖИВ (бандлы качаются один раз), картинки/шрифты не трогаем.
-    // Перехват (0.10.29/0.10.32) отключал кэш → каждая загрузка тянула бандлы заново. Тумблер панели: выкл =
-    // вообще без CDP-блокировки (видео будет есть прокси).
+    // ЭКОНОМИЯ ПРОКСИ-ТРАФИКА v2 (возврат 0.10.30 по решению владельца): CDP setBlockedURLs на картинки/
+    // шрифты/видео — кэш ЖИВ (бандлы качаются один раз). Тумблер панели: выкл = вообще без CDP-блокировки.
     try {
       const page = win.page;
       if (page && !win.__resBlock && settings.octoBlockResources !== false) {
         win.__resBlock = true;
-        const exts = ["m3u8", "mpd", "ts", "m4s", "mp4", "m4v", "webm", "ogv", "mp3", "m4a", "aac", "ogg"]; // .ts = HLS-сегменты (TypeScript в прод не раздают)
+        const exts = ["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "ico",
+          "woff", "woff2", "ttf", "otf", "eot",
+          "m3u8", "mpd", "ts", "m4s", "mp4", "m4v", "webm", "ogv", "mp3", "m4a", "aac", "ogg"]; // .ts = HLS-сегменты (TypeScript в прод не раздают)
         const urls = [];
         for (const e of exts) { urls.push("*." + e); urls.push("*." + e + "?*"); }
         urls.push("*/hls/*", "*/dash/*"); // сегменты стримов без расширения в пути (напр. …/hls/segment?...)
@@ -310,7 +310,7 @@ async function openOctoBooker(profile, overrideUrl) {
         await cdp.send("Network.enable");
         await cdp.send("Network.setBlockedURLs", { urls });
         await cdp.send("Network.setCacheDisabled", { cacheDisabled: false }); // кэш явно ВКЛ
-        logger.log("INFO", "Octo: блок ресурсов v3 (ТОЛЬКО видео/аудио-стримы; картинки/шрифты в кэше; HTTP-КЭШ ЖИВ)");
+        logger.log("INFO", "Octo: блок ресурсов v2 (CDP: картинки/шрифты/видео; HTTP-КЭШ ЖИВ) — экономия прокси-трафика");
       } else if (page && !win.__resBlock) {
         win.__resBlock = true;
         logger.log("INFO", "Octo: блок ресурсов ВЫКЛЮЧЕН тумблером — страница грузит всё (видео будет есть прокси-трафик)");
