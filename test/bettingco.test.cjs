@@ -66,6 +66,27 @@ test("matchEvents: SUBSET-фолбэк (NPB-префикс региона) — �
   assert.equal(bc.matchEvents(B2, P2).length, 0);
 });
 
+test("betanoOutcomes: ЕВРОПЕЙСКИЙ хендикап (3-way с ничьёй) помечается draw → value не считается", () => {
+  // реальный кейс 08-07: сигнал AH1(+1.5) Pinnacle ↔ Betano «Handicap Match Result» (+2 с ничьёй) — разные
+  // рынки, de-vig 2-way дал ложный value, спас текстовый судья. Теперь режем в фиде.
+  const mk = [
+    { surebetTextId: "/Main/Main", meta: "Handicap Match Result | FC Kairat -2", marketValue: 1.85, marketParameter: -2 },
+    { surebetTextId: "/Main/Main", meta: "Handicap Match Result | Draw -2", marketValue: 3.6, marketParameter: -2 },
+    { surebetTextId: "/Main/Main", meta: "Handicap Match Result | FK Sutjeska 2", marketValue: 4.2, marketParameter: 2 },
+  ];
+  const out = bc.betanoOutcomes(mk, "FC Kairat", "FK Sutjeska");
+  const keys = Object.keys(out).filter((k) => k.includes("SPREAD"));
+  assert.ok(keys.length, "SPREAD-ключи должны существовать");
+  for (const k of keys) assert.equal(out[k].draw, true, "ключ " + k + " должен быть помечен draw");
+  // и valueForEvent (сырые массивы обеих БК) такие рынки пропускает (draw хотя бы в одной БК)
+  const pinnRaw = [
+    { surebetTextId: "/Main/Main", meta: "9|0|SPREAD|TEAM1||-2|3", marketValue: 1.9, marketParameter: -2 },
+    { surebetTextId: "/Main/Main", meta: "9|0|SPREAD|TEAM2||2|3", marketValue: 1.9, marketParameter: 2 },
+  ];
+  const sigs = bc.valueForEvent(mk, pinnRaw, "FC Kairat", "FK Sutjeska", { threshold: 0.001 });
+  assert.equal(sigs.filter((s) => s.kind === "SPREAD").length, 0);
+});
+
 test("devig2: снимает маржу, сумма вероятностей 1", () => {
   const [a, b] = bc.devig2(1.5, 2.5);
   assert.ok(near(a + b, 1));

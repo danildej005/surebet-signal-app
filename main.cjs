@@ -294,27 +294,27 @@ async function openOctoBooker(profile, overrideUrl) {
     win = r.win; win.__browser = r.browser;
     octoWins.set(id, win);
     try { r.browser.on("disconnected", () => { octoWins.delete(id); logger.log("INFO", "Octo: соединение разорвано", id); }); } catch { /* ignore */ }
-    // ЭКОНОМИЯ ПРОКСИ-ТРАФИКА: режем тяжёлое косметическое в ГЛАВНОМ фрейме — картинки/шрифты (по типу) и
-    // live-видео (HLS/DASH-стрим .m3u8/.ts/.m4s/.mp4 идёт как xhr/fetch, по типу не ловится → режем по расширению).
-    // script/xhr/fetch/document/stylesheet к Betano НЕ трогаем (иначе рынки/вёрстка не прогрузятся).
-    // ⚠️ СУБФРЕЙМЫ (iframe) НЕ ТРОГАЕМ вообще: окно логина/регистрации/капчи Betano — отдельный iframe со свежим
-    // контентом; блок делал его БЕЛЫМ. Host-блок аналитики тоже убран (мог резать функциональный скрипт формы;
-    // против видео экономил мало). Ставим ОДИН раз до первой навигации → действует и на keep-alive, и на события.
+    // ЭКОНОМИЯ ПРОКСИ-ТРАФИКА v2: блокировка через CDP Network.setBlockedURLs вместо setRequestInterception.
+    // КРИТИЧНО: перехват (interception) ОТКЛЮЧАЕТ HTTP-КЭШ страницы → JS-бандлы/стили Betano (мегабайты)
+    // качались ЗАНОВО на каждой из сотен загрузок в сутки — экономия на картинках съедалась потерей кэша.
+    // setBlockedURLs блокирует по URL-паттернам БЕЗ перехвата → кэш живёт, бандлы качаются один раз.
+    // Паттерны — только тяжёлая косметика и видео/аудио: картинки, шрифты, HLS/DASH-сегменты. JS/CSS/XHR/JSON
+    // не трогаем нигде (включая iframe логина — форма живёт на своих скриптах; блок шрифтов/картинок ей не вредит).
     try {
       const page = win.page;
       if (page && !win.__resBlock && settings.octoBlockResources !== false) {
         win.__resBlock = true;
-        const BLOCK_EXT = /\.(m3u8|mpd|ts|m4s|mp4|m4v|mov|webm|ogv|mp3|m4a|aac|ogg)(\?|#|$)/i; // только видео/аудио-стримы
-        await page.setRequestInterception(true);
-        page.on("request", (req) => {
-          try {
-            let sub = false; try { sub = !!req.frame() && req.frame() !== page.mainFrame(); } catch { /* нет фрейма → считаем главным */ }
-            const t = req.resourceType(), u = req.url();
-            if (!sub && (t === "image" || t === "media" || t === "font" || BLOCK_EXT.test(u))) req.abort().catch(() => {});
-            else req.continue().catch(() => {});
-          } catch { try { req.continue(); } catch { /* ignore */ } }
-        });
-        logger.log("INFO", "Octo: блок ресурсов ВКЛ (главный фрейм: image/media/font + видео-стримы; iframe логина не трогаем) — экономия прокси-трафика");
+        const exts = ["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "ico",
+          "woff", "woff2", "ttf", "otf", "eot",
+          "m3u8", "mpd", "ts", "m4s", "mp4", "m4v", "webm", "ogv", "mp3", "m4a", "aac", "ogg"]; // .ts = HLS-сегменты (TypeScript в прод не раздают)
+        const urls = [];
+        for (const e of exts) { urls.push("*." + e); urls.push("*." + e + "?*"); }
+        urls.push("*/hls/*", "*/dash/*"); // сегменты стримов без расширения в пути (напр. …/hls/segment?...)
+        const cdp = await page.target().createCDPSession();
+        await cdp.send("Network.enable");
+        await cdp.send("Network.setBlockedURLs", { urls });
+        await cdp.send("Network.setCacheDisabled", { cacheDisabled: false }); // кэш явно ВКЛ
+        logger.log("INFO", "Octo: блок ресурсов v2 (CDP setBlockedURLs: картинки/шрифты/видео; HTTP-КЭШ ЖИВ) — экономия прокси-трафика");
       }
     } catch (e) { logger.log("WARN", "Octo блок ресурсов:", e && e.message); }
     logger.log("INFO", "Octo подключён:", id, "uuid:", String(settings.octoProfileId).slice(0, 8) + "…", "ws:", String(r.wsEndpoint).slice(0, 40));
@@ -1026,8 +1026,24 @@ async function placeBet(id, stake, live = false, opts = {}) {
   const slipOdds = slipOddsFromBtn(r.placeBtnText, stake);
   r.slipOdds = slipOdds;
   const expOdds = Number(s.expectedOdds) || null;
-  const slipOddsOk = (slipOdds && expOdds) ? (slipOdds >= expOdds * (1 - ODDS_TOLERANCE)) : null; // null = цену купона не прочитать → не блокируем (кнопку исхода уже проверили)
+  // Гейт цены купона В ОБЕ СТОРОНЫ: вниз — кэф уехал (допуск 1.5%); ВВЕРХ +25% — цена кнопки неправдоподобно
+  // выше выбора = в купоне НЕ ОДНА ставка (экспресс: winnings = произведение кэфов) или чужой рынок.
+  const slipOddsOk = (slipOdds && expOdds)
+    ? (slipOdds >= expOdds * (1 - ODDS_TOLERANCE) && slipOdds <= expOdds * 1.25)
+    : null; // null = цену купона не прочитать → не блокируем (кнопку исхода уже проверили)
   r.slipOddsOk = slipOddsOk;
+  if (slipOdds && expOdds && slipOdds > expOdds * 1.25) logger.log("WARN", "  [value] цена купона ПОДОЗРИТЕЛЬНО выше выбора: " + slipOdds + " vs " + expOdds + " — возможен экспресс/чужой рынок, блок");
+  // СЧЁТ ВЫБОРОВ в купоне: кэфы пишутся с ДВУМЯ знаками (2.10), линии — с одним (22.5) → число «X.YZ» в
+  // тексте купона до «€» = число выборов. Больше одного → НЕ кликаем и чистим (защита от экспресса).
+  const slipSelCount = ((String(r.slipText || "").split("€")[0] || "").match(/\b\d+\.\d\d\b/g) || []).length;
+  if (slipSelCount >= 2) {
+    r.error = "в купоне НЕ ОДИН выбор (" + slipSelCount + ") — не кликаю, чищу купон";
+    logger.log("ERROR", "🔴 [value] " + r.error + " | slipText=" + JSON.stringify(String(r.slipText).slice(0, 160)));
+    await ensureBetslipClean(s.win, s.cfg);
+    r.ok = false;
+    logger.log("INFO", live ? "PLACE" : "dry-run", id, JSON.stringify(r));
+    return r;
+  }
   // НЕЗАВИСИМЫЙ СУДЬЯ: сверить ВЫБОР с СИГНАЛОМ (тип/линия/сторона/кэф, без экспрессов). Не совпало → в боевом
   // НЕ ставим и пишем причину; в dry-run логируем вердикт (видно, что судья работает, до боевого). skip = нечем сверять.
   const bet = s.bet || {};
@@ -1476,6 +1492,13 @@ async function checkLateAccepts() {
   if (!win || win.isDestroyed()) return;
   let rows;
   try { rows = await readSlipBets(win); } catch { return; }
+  // ДИАГ СЛЕПОТЫ (0/26 за 08-07): что контролёр реально ВИДИТ на текущей странице — открытые ставки чужих
+  // событий могут не отображаться. По этим логам решим, как читать надёжно (вкладка Open Bets / другой источник).
+  try {
+    let u = ""; try { u = win.webContents.getURL(); } catch { /* ignore */ }
+    logger.log("INFO", "  [поздний приём] контроль: жду " + valueLatePending.length + " шт | вижу строк ставок: " + rows.length +
+      (rows.length ? " [" + rows.slice(0, 3).join("; ") + "]" : "") + " | стр: …" + String(u).slice(-45));
+  } catch { /* ignore */ }
   const now = Date.now();
   for (let i = valueLatePending.length - 1; i >= 0; i--) {
     const p = valueLatePending[i];
@@ -2345,6 +2368,7 @@ async function keepBookersAlive() {
 // Лёгкая активность (движение мыши через CDP Octo) + перезагрузка той же страницы → серверный запрос
 // продлевает сессию. Скип, если идёт ставка (valueBusy/botBusy) или вкладка в фокусе (юзер сам работает).
 let keepOctoRunning = false;
+const octoLastReload = new Map(); // id → ts последнего ПОЛНОГО reload (активность каждый цикл, reload раз в 30 мин)
 async function keepOctoAlive() {
   // valuePlaceBusy — чтобы НЕ перезагрузить страницу во время простановки (иначе собьём ставку).
   if (keepOctoRunning || botBusy || valueBusy || valuePlaceBusy || !settings.keepAlive) return;
@@ -2356,11 +2380,22 @@ async function keepOctoAlive() {
       // Скип по document.hasFocus() УБРАН: на ВДС окно Octo почти всегда «в фокусе» → анти-разлогин не срабатывал
       // и Betano выкидывал по бездействию. Держим сессию всегда; для ручного логина есть тумблер keepAlive.
       let before = ""; try { before = win.webContents.getURL(); } catch { /* ignore */ }
-      try { if (win.page && win.page.mouse) await win.page.mouse.move(6 + Math.random() * 14, 6 + Math.random() * 14); } catch { /* ignore */ }
+      // ЭКОНОМИЯ ПРОКСИ: раньше КАЖДЫЙ цикл перезагружал страницу (~480 загрузок/сутки, мегабайты каждая).
+      // Для продления сессии Betano достаточно АКТИВНОСТИ (мышь+скролл); полный reload — не чаще раза в 30 мин.
+      try {
+        if (win.page && win.page.mouse) await win.page.mouse.move(6 + Math.random() * 14, 6 + Math.random() * 14);
+        await win.webContents.executeJavaScript("window.scrollBy(0, (Math.random() - 0.5) * 40); true").catch(() => {});
+      } catch { /* ignore */ }
       await sleep(800);
       if (botBusy || valueBusy || valuePlaceBusy || win.isDestroyed()) continue;
-      if (before && /^https?:/i.test(before)) { try { await win.loadURL(before); } catch { /* ignore */ } }
-      logger.log("INFO", "анти-разлогин Octo:", id, "активность + обновление");
+      const lastReload = octoLastReload.get(id) || 0;
+      if (Date.now() - lastReload > 30 * 60 * 1000) {
+        if (before && /^https?:/i.test(before)) { try { await win.loadURL(before); } catch { /* ignore */ } }
+        octoLastReload.set(id, Date.now());
+        logger.log("INFO", "анти-разлогин Octo:", id, "активность + обновление (полный reload раз в 30 мин)");
+      } else {
+        logger.log("INFO", "анти-разлогин Octo:", id, "активность (без перезагрузки — экономия прокси)");
+      }
     }
   } catch { /* ignore */ } finally { keepOctoRunning = false; }
 }
