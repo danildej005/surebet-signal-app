@@ -294,19 +294,16 @@ async function openOctoBooker(profile, overrideUrl) {
     win = r.win; win.__browser = r.browser;
     octoWins.set(id, win);
     try { r.browser.on("disconnected", () => { octoWins.delete(id); logger.log("INFO", "Octo: соединение разорвано", id); }); } catch { /* ignore */ }
-    // ЭКОНОМИЯ ПРОКСИ-ТРАФИКА v2: блокировка через CDP Network.setBlockedURLs вместо setRequestInterception.
-    // КРИТИЧНО: перехват (interception) ОТКЛЮЧАЕТ HTTP-КЭШ страницы → JS-бандлы/стили Betano (мегабайты)
-    // качались ЗАНОВО на каждой из сотен загрузок в сутки — экономия на картинках съедалась потерей кэша.
-    // setBlockedURLs блокирует по URL-паттернам БЕЗ перехвата → кэш живёт, бандлы качаются один раз.
-    // Паттерны — только тяжёлая косметика и видео/аудио: картинки, шрифты, HLS/DASH-сегменты. JS/CSS/XHR/JSON
-    // не трогаем нигде (включая iframe логина — форма живёт на своих скриптах; блок шрифтов/картинок ей не вредит).
+    // ЭКОНОМИЯ ПРОКСИ-ТРАФИКА v3: блокируем ТОЛЬКО live-видео/аудио-потоки (автостартуют на Betano и не
+    // кэшируются в принципе — мегабайты/мин через прокси). Картинки/шрифты НЕ трогаем: их держит HTTP-кэш
+    // (перехвата больше нет → кэш жив, бандлы качаются один раз). v2 (блок и картинок/шрифтов, 52 паттерна)
+    // давал СУПЕРДОЛГУЮ загрузку страниц — откатили до минимального видео-списка. Тумблер в панели: выкл =
+    // вообще без CDP-блокировки (диагностический режим, если и видео-блок замедлит).
     try {
       const page = win.page;
       if (page && !win.__resBlock && settings.octoBlockResources !== false) {
         win.__resBlock = true;
-        const exts = ["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "ico",
-          "woff", "woff2", "ttf", "otf", "eot",
-          "m3u8", "mpd", "ts", "m4s", "mp4", "m4v", "webm", "ogv", "mp3", "m4a", "aac", "ogg"]; // .ts = HLS-сегменты (TypeScript в прод не раздают)
+        const exts = ["m3u8", "mpd", "ts", "m4s", "mp4", "m4v", "webm", "ogv", "mp3", "m4a", "aac", "ogg"]; // .ts = HLS-сегменты (TypeScript в прод не раздают)
         const urls = [];
         for (const e of exts) { urls.push("*." + e); urls.push("*." + e + "?*"); }
         urls.push("*/hls/*", "*/dash/*"); // сегменты стримов без расширения в пути (напр. …/hls/segment?...)
@@ -314,7 +311,10 @@ async function openOctoBooker(profile, overrideUrl) {
         await cdp.send("Network.enable");
         await cdp.send("Network.setBlockedURLs", { urls });
         await cdp.send("Network.setCacheDisabled", { cacheDisabled: false }); // кэш явно ВКЛ
-        logger.log("INFO", "Octo: блок ресурсов v2 (CDP setBlockedURLs: картинки/шрифты/видео; HTTP-КЭШ ЖИВ) — экономия прокси-трафика");
+        logger.log("INFO", "Octo: блок ресурсов v3 (ТОЛЬКО видео/аудио-стримы; картинки/шрифты в кэше; HTTP-КЭШ ЖИВ)");
+      } else if (page && !win.__resBlock) {
+        win.__resBlock = true;
+        logger.log("INFO", "Octo: блок ресурсов ВЫКЛЮЧЕН тумблером — страница грузит всё (видео будет есть прокси-трафик)");
       }
     } catch (e) { logger.log("WARN", "Octo блок ресурсов:", e && e.message); }
     logger.log("INFO", "Octo подключён:", id, "uuid:", String(settings.octoProfileId).slice(0, 8) + "…", "ws:", String(r.wsEndpoint).slice(0, 40));
@@ -2463,6 +2463,7 @@ ipcMain.handle("save-settings", (_e, patch) => {
   if (patch.valueThreshold !== undefined) clean.valueThreshold = Math.max(0, Number(patch.valueThreshold) || 0.05);
   if (patch.valueMax !== undefined) clean.valueMax = Math.max(0.01, Number(patch.valueMax) || 0.25);           // потолок value (доля)
   if (patch.keepAliveMs !== undefined) clean.keepAliveMs = Math.max(45000, Number(patch.keepAliveMs) || 180000); // период анти-разлогина (мс)
+  if (patch.octoBlockResources !== undefined) clean.octoBlockResources = !!patch.octoBlockResources; // блок live-видео (экономия прокси)
   if (patch.valueStake !== undefined) clean.valueStake = Math.max(0, Number(patch.valueStake) || 0);
   if (patch.valueMaxPerDay !== undefined) clean.valueMaxPerDay = Math.max(0, Number(patch.valueMaxPerDay) || 0);
   if (patch.valueRefSource === "ps3838" || patch.valueRefSource === "oddspapi") clean.valueRefSource = patch.valueRefSource;

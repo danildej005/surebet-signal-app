@@ -22,6 +22,7 @@ function renderStatus(s) {
     $("valueThreshold").value = Math.round((v.valueThreshold != null ? v.valueThreshold : 0.05) * 1000) / 10; // доля → %
     if ($("valueThresholdMax")) $("valueThresholdMax").value = Math.round((v.valueMax != null ? v.valueMax : 0.25) * 1000) / 10; // потолок value, доля → %
     if ($("keepAliveSec")) $("keepAliveSec").value = Math.round((v.keepAliveMs != null ? v.keepAliveMs : 180000) / 1000); // мс → сек
+    if ($("octoBlockResources")) $("octoBlockResources").checked = v.octoBlockResources !== false; // блок live-видео (экономия прокси)
     $("valueOddsMin").value = v.valueOddsMin || "";
     $("valueOddsMax").value = v.valueOddsMax || "";
     if (v.valueStake) $("valueStake").value = v.valueStake;
@@ -174,6 +175,7 @@ function saveValue() {
     valueLive: $("valueLive").checked,
     valuePlace: $("valuePlace") ? $("valuePlace").checked : false,
     valuePlaceRequireArb: $("valuePlaceRequireArb") ? $("valuePlaceRequireArb").checked : false,
+    octoBlockResources: $("octoBlockResources") ? $("octoBlockResources").checked : true, // блок live-видео (экономия прокси; применяется при след. подключении Octo)
     valuePlaceKinds: ($("valuePlaceMlOnly") && $("valuePlaceMlOnly").checked) ? ["ML"] : [],
     valueSports: valueSportsState.map((s) => ({ key: s.key, name: s.name, oa: s.oa, ps: s.ps, on: !!s.on, exclude: Array.isArray(s.exclude) ? s.exclude : [] })),
     valueMarkets: valueMarketsState.slice(),
@@ -190,6 +192,7 @@ if ($("valueLive")) $("valueLive").onchange = () => saveValue().then(() => { $("
 if ($("valuePlace")) $("valuePlace").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valuePlace").checked ? "🅱️ простановка ВКЛ" : "простановка выкл"; }).catch(() => {});
 if ($("valuePlaceRequireArb")) $("valuePlaceRequireArb").onchange = () => saveValue().catch(() => {});
 if ($("valuePlaceMlOnly")) $("valuePlaceMlOnly").onchange = () => saveValue().catch(() => {});
+if ($("octoBlockResources")) $("octoBlockResources").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("octoBlockResources").checked ? "видео-блок ВКЛ (применится при след. подключении Octo)" : "видео-блок ВЫКЛ (перезапусти Octo-окно)"; }).catch(() => {});
 
 // Старт/стоп value-сессии — ОТДЕЛЬНАЯ кнопка (тумблеры её не запускают). Перед стартом сохраняем конфиг.
 let valueSessionOn = false;
