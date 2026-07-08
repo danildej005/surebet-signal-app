@@ -12,7 +12,7 @@ const { formatSignal } = require("./lib/format.cjs");
 const { makeDeduper } = require("./lib/dedupe.cjs");
 const { readSurebet } = require("./lib/surebetReader.cjs");
 const settingsStore = require("./lib/settings.cjs");
-const { defaultBookers, emptyProxy, buildProxyString, betanoTarget, localizeBetanoUrl, betanoCategoryFor, sameSideSelected, randomFingerprint, randomUA, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, verifyPick, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
+const { defaultBookers, emptyProxy, buildProxyString, betanoTarget, localizeBetanoUrl, betanoCategoryFor, sameSideSelected, randomFingerprint, randomUA, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, verifyPick, verifySlipMarket, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 const fx = require("./lib/fx.cjs");
 const { parseMoney, vilkaStakes, slipOddsFromBtn } = require("./lib/vilka.cjs");
@@ -1035,21 +1035,36 @@ async function placeBet(id, stake, live = false, opts = {}) {
   r.verified = verdict.ok;
   if (!verdict.ok) { r.verifyReason = verdict.reason; logger.log("WARN", "  [судья] ВЫБОР ≠ СИГНАЛ: " + verdict.reason); }
   else if (!verdict.skip) logger.log("INFO", "  [судья] выбор совпал с сигналом ✓");
-  if (live && r.hasPlaceBtn && s.oddsOk !== false && slipOddsOk !== false && verdict.ok) {
+  // СУДЬЯ ПО ЯРЛЫКУ КУПОНА (последний замок): рынок, который написала САМА Betano в купоне, должен совпасть
+  // с рынком сигнала. Ловит даже кривой id фида (клик по чужой кнопке). Явное противоречие → блок боевого.
+  const slipVerdict = verifySlipMarket({ kind: bet.kind, st: bet.st, sportType: bet.sportType }, r.slipText);
+  if (!slipVerdict.ok) {
+    r.verified = false; r.verifyReason = slipVerdict.reason;
+    logger.log("WARN", "  [судья-купон] РЫНОК КУПОНА ≠ СИГНАЛУ: " + slipVerdict.reason);
+  } else if (!slipVerdict.skip) logger.log("INFO", "  [судья-купон] ярлык рынка совпал ✓");
+  if (live && r.hasPlaceBtn && s.oddsOk !== false && slipOddsOk !== false && verdict.ok && slipVerdict.ok) {
     // #4 READ-BACK v2: снимок живых ставок купона ДО клика → клик → ждём ПОЯВЛЕНИЯ новой строки
     // «Bet <наша сумма> € Potential winnings <W> €». Появилась = ПРИНЯТО (позитивное доказательство от самой
     // Betano) + реальный кэф W/stake. v1 («поле суммы исчезло») давал ложные минусы — принятые ставки
     // числились непоставленными (нет ТГ, врут счётчики/лимиты/P&L).
     const before = await readSlipBets(s.win);
     await clickPlace(s.win, s.cfg);
-    let confirmed = null;
-    for (let i = 0; i < 12 && !confirmed; i++) {
-      await sleep(500);
-      const fresh = newSlipBets(before, await readSlipBets(s.win))
-        .map((k) => k.split("|").map(parseMoney))
-        .filter(([st, w]) => st != null && w != null && Math.abs(st - Number(stake)) < 0.011);
-      if (fresh.length) confirmed = fresh[0];
-    }
+    // Приём бывает МЕДЛЕННЫМ: 3 реальных ставки (07-08: Nasridinov 3,60; Nakagawa 4,90; Balan 3,80) встали
+    // ПОЗЖЕ старого окна 6с → бот врал «не поставлено». Окно 12с + повторный клик + поздний приём (ниже).
+    const waitConfirm = async (ms) => {
+      for (let waited = 0; waited < ms; waited += 500) {
+        await sleep(500);
+        const fresh = newSlipBets(before, await readSlipBets(s.win))
+          .map((k) => k.split("|").map(parseMoney))
+          .filter(([st, w]) => st != null && w != null && Math.abs(st - Number(stake)) < 0.011);
+        if (fresh.length) return fresh[0];
+      }
+      return null;
+    };
+    // ПОВТОРНЫЙ КЛИК НЕ ДЕЛАЕМ: сверка с историей Betano (07-08) показала — ставка встаёт с задержкой ДАЖЕ
+    // когда кнопка BET NOW осталась живой (Nasridinov 02:18: кнопка жива, «не подтверждена», а в истории стоит).
+    // Живая кнопка НЕ доказывает «не принято» → повторный клик = риск ДУБЛЯ. Поздний приём ловит контролёр ниже.
+    const confirmed = await waitConfirm(12000);
     r.placed = !!confirmed;
     if (confirmed) {
       r.realOdds = Math.round((confirmed[1] / confirmed[0]) * 1000) / 1000;
@@ -1058,7 +1073,12 @@ async function placeBet(id, stake, live = false, opts = {}) {
         logger.log("WARN", "  [квитанция] реальный кэф " + r.realOdds + " ≠ кэфу выбора " + r.selectedOdds + " (приняли по другому)");
     } else {
       r.error = "квитанция не подтвердила приём (новая строка ставки не появилась)";
-      logger.log("ERROR", "🔴 [value] боевой клик, но квитанция НЕ подтвердила ставку — считаем НЕ поставлено, проверь купон/историю вручную");
+      logger.log("ERROR", "🔴 [value] боевой клик, но квитанция НЕ подтвердила ставку — ставим на КОНТРОЛЬ позднего приёма (Betano бывает доводит ставку минутами)");
+      // ПОЗДНИЙ ПРИЁМ: цели-winnings, по которым контролёр (checkLateAccepts) опознает ставку задним числом.
+      r.slipBefore = before;
+      const tgts = new Set();
+      for (const o of [slipOdds, r.selectedOdds, slipOddsFromBtn(r.placeBtnText, stake)]) if (o) tgts.add(Math.round(o * Number(stake) * 100) / 100);
+      r.lateTargets = [...tgts];
     }
     await captureBetslip(s.win, s.cfg, r.placed); // диаг-снимок квитанции — продолжаем собирать разметку
   }
@@ -1068,6 +1088,7 @@ async function placeBet(id, stake, live = false, opts = {}) {
     logger.log("WARN", "  [value] пропуск (кэф купона уехал): " + r.error);
   }
   else if (live && r.hasPlaceBtn && s.oddsOk !== false && !verdict.ok) r.error = "судья заблокировал: " + verdict.reason;
+  else if (live && r.hasPlaceBtn && s.oddsOk !== false && !slipVerdict.ok) r.error = "судья-купон заблокировал: " + slipVerdict.reason;
   logger.log("INFO", live ? "PLACE" : "dry-run", id, JSON.stringify(r));
   return r;
 }
@@ -1445,6 +1466,37 @@ let valueEngine = null, valueEngineTimer = null, valueEngineBusy = false, valueE
 let valuePlaceBusy = false, valuePlaceCount = 0, valuePlaceDay = "", valuePlaceDiagAt = 0; // состояние ставочной части (busy/лимит/день/диаг)
 let valueRun = false; // сессия value запущена ПОЛЬЗОВАТЕЛЕМ (кнопкой value-run), НЕ тумблером — движок стартует только при этом
 const valuePlaced = []; // sigKey'и поставленных/пробованных в сессии, С ПОВТОРАМИ (для лимита дублей). Лимиты — в valueplace.choosePlacement
+// КОНТРОЛЬ ПОЗДНЕГО ПРИЁМА: Betano доводит ставку сервер-сайд десятками секунд ПОСЛЕ клика — сверка с
+// историей 07-08 показала 6/6 «квитанция НЕ подтвердила» реально ВСТАЛИ. Очередь целей-winnings; контролёр
+// раз в 45с ищет их появление в купоне → задним числом «поставлено» (лог+ТГ+счётчики). 30 мин не нашёл → WARN.
+const valueLatePending = [];
+async function checkLateAccepts() {
+  if (!valueLatePending.length) return;
+  const win = bookerWin("betano");
+  if (!win || win.isDestroyed()) return;
+  let rows;
+  try { rows = await readSlipBets(win); } catch { return; }
+  const now = Date.now();
+  for (let i = valueLatePending.length - 1; i >= 0; i--) {
+    const p = valueLatePending[i];
+    if (now - p.ts > 30 * 60 * 1000) {
+      valueLatePending.splice(i, 1);
+      logger.log("WARN", "[value] ⚠️ поздний приём НЕ подтвердился за 30 мин: " + p.selected + " — сверь историю Betano вручную");
+      continue;
+    }
+    const fresh = newSlipBets(p.before, rows).map((k) => k.split("|").map(parseMoney))
+      .filter(([st, w]) => st != null && w != null && Math.abs(st - p.stake) < 0.011 && p.targets.some((t) => Math.abs(w - t) < 0.011));
+    if (!fresh.length) continue;
+    const [st, w] = fresh[0];
+    const realOdds = Math.round((w / st) * 1000) / 1000;
+    valuePlaceCount++; markValuePlaced(p.key); // счётчики. В valuePlaced ключ УЖЕ лежит (пушится при попытке) — не дублируем
+    logger.log("INFO", "[value] ✅ ПОЗДНИЙ ПРИЁМ подтверждён: " + p.selected + " @" + realOdds + " (winnings " + w + "€) — учтено задним числом");
+    if (settings.tgToken && settings.tgChat)
+      tg("✅ <b>VALUE поставлено (поздний приём)</b>\n" + escHtml((p.t1 || "?") + " vs " + (p.t2 || "?")) + "\n" + escHtml(p.desc + " @" + realOdds) + " · value +" + ((p.value || 0) * 100).toFixed(1) + "%").catch(() => {});
+    valueLatePending.splice(i, 1);
+  }
+}
+setInterval(() => { checkLateAccepts().catch(() => {}); }, 45000);
 let sessionStart = 0;
 // ВСЯ сессия (НЕ чистим до её закрытия): key → {sport,sportType,t1,t2,market,side,maxValue,first,last,count,placed,betanoOdds}.
 // Время жизни валуя = last−first (от появления до последнего раза, что видели ≥ порога). placed — для будущей простановки (сейчас 0).
@@ -1465,7 +1517,7 @@ async function startValueEngine() {
     const eng = new ValueLiveEngine(settings.bettingcoKey, { onInitDiag: (bk, shape, n) => logger.log("WARN", "[value] " + bk + " init ждёт (" + shape + "), попытка " + n) });
     await eng.init();
     valueEngine = eng;
-    sessionStart = Date.now(); sessionSignals.clear(); sessionEvents.clear(); valuePlaced.length = 0; valuePlaceCount = 0; valueDiagSentNT = 0; valueGapN = 0; valueGapSum = 0; valueGapGone = 0; // новая сессия
+    sessionStart = Date.now(); sessionSignals.clear(); sessionEvents.clear(); valuePlaced.length = 0; valueLatePending.length = 0; valuePlaceCount = 0; valueDiagSentNT = 0; valueGapN = 0; valueGapSum = 0; valueGapGone = 0; // новая сессия
     const c = eng.counts();
     logger.log("INFO", "[value] движок bettingco поднят: Betano игр " + c.games + " | Pinnacle игр " + c.pinGames);
     // Конфиг запуска в лог — чтобы сразу видеть, что реально включено (частый ловец: valuePlace off / octoMode off / стейк=0).
@@ -1615,6 +1667,15 @@ async function tryPlaceFromValueSignals(sigs) {
       if (res && res.placed) tg("✅ <b>VALUE поставлено</b>\n" + escHtml((c.t1 || "?") + " vs " + (c.t2 || "?")) + "\n" + escHtml(c.desc + " @" + (res.realOdds || res.selectedOdds || c.expectedOdds)) + " · value +" + ((c.value || 0) * 100).toFixed(1) + "%").catch(() => {});
       else if (live && res && res.verifyReason) tg("🛑 <b>Судья отклонил ставку</b>\n" + escHtml((c.t1 || "?") + " vs " + (c.t2 || "?")) + "\n" + escHtml("сигнал: " + c.desc) + "\n" + escHtml(res.verifyReason)).catch(() => {});
     }
+    // КОНТРОЛЬ ПОЗДНЕГО ПРИЁМА: Betano доводит ставку минутами после клика (доказано: Nasridinov 3,60;
+    // Nakagawa 4,90; Balan 3,80 — все встали ПОСЛЕ окна, бот записал «не поставлено», ТГ не пришёл, счётчики
+    // врали). Кладём цели-winnings в очередь — контролёр checkLateAccepts опознает и учтёт задним числом.
+    if (live && res && !res.placed && Array.isArray(res.lateTargets) && res.lateTargets.length) {
+      valueLatePending.push({ key: c.key, desc: c.desc, t1: c.t1, t2: c.t2, value: c.value,
+        selected: res.selected, stake: Number(c.stake) || 0, targets: res.lateTargets,
+        before: res.slipBefore || [], ts: Date.now() });
+      logger.log("INFO", "  [поздний приём] на контроле: " + res.selected + " (жду winnings " + res.lateTargets.join("/") + "€ до 30 мин)");
+    }
     // ПАУЗА между попытками (держим valuePlaceBusy → следующая не стартует): успех — 10с, отказ — 3с. Купон уже
     // очищен в runValueCycle; пауза даёт странице устаканиться и разносит ставки по времени.
     await sleep(res && res.placed ? 10000 : 3000);
@@ -1674,8 +1735,25 @@ function flushSessionStats() {
     L.push("  " + pad(e.sport, 12) + " | " + e.t1 + " vs " + e.t2 + " | " + e.market + " " + e.side +
       " | " + vpair(val(e), e.maxValue) + " | " + arbS(e.arbPct || 0) + "/" + arbS(e.maxArb || 0) +
       " | " + ((e.margin || 0) * 100).toFixed(1) + "% | " + sigLife(e) + "с | " + e.count + "× | " + e._fin + " | " + resWord[e._res] + " | " + pnlS(e._pnl));
+  // ОСНОВНОЙ файл сессии = ПОДРОБНАЯ хронология как в main.log (СТАВЛЮ/судья/квитанция/PLACE/dry-run…) —
+  // по просьбе владельца вместо сводки. Сводка (бэктест/спорты/сигналы) — рядом в «-summary.txt», JSON как был.
+  // Ротацию main.log учитываем: склеиваем .1 + текущий и режем по времени старта сессии.
+  let detail = "";
+  try {
+    const logDir = (logger.dir && logger.dir()) || app.getPath("userData");
+    let all = "";
+    for (const f of ["main.log.1", "main.log"]) { try { all += fsx.readFileSync(join(logDir, f), "utf8"); } catch { /* ignore */ } }
+    const lines = all.split("\n");
+    const from = lines.findIndex((ln) => { const m = ln.match(/^\[(\d{4}-[^\]]+)\]/); return m && Date.parse(m[1]) >= start; });
+    detail = from >= 0 ? lines.slice(from).join("\n") : "";
+  } catch { /* ignore */ }
   const file = join(dir, "value-session-" + iso(start).replace(/[: ]/g, "-") + ".txt");
-  try { fsx.writeFileSync(file, L.join("\n") + "\n", "utf8"); logger.log("INFO", "[value] сессия сохранена: " + file + " (" + n + " валуёв, ставок " + bets + ", флэты " + units.toFixed(2) + ")"); }
+  const fileSum = join(dir, "value-session-" + iso(start).replace(/[: ]/g, "-") + "-summary.txt");
+  try {
+    fsx.writeFileSync(file, (detail || L.join("\n")) + "\n", "utf8"); // подробный; не смогли прочитать main.log → фолбэк на сводку
+    fsx.writeFileSync(fileSum, L.join("\n") + "\n", "utf8");
+    logger.log("INFO", "[value] сессия сохранена: " + file + " (" + n + " валуёв, ставок " + bets + ", флэты " + units.toFixed(2) + ")");
+  }
   catch (e) { logger.log("WARN", "[value] сессия не сохранена: " + e.message); }
   // Машиночитаемый JSON рядом с .txt — источник для сводки за всё время (settle уже посчитан здесь).
   const jsonRows = arr.map((e) => { const ev = sessionEvents.get(e.t1 + "~" + e.t2);
@@ -1715,7 +1793,7 @@ async function runValueCycle(c, live) {
   if (!booker) return { ok: false, error: "контора betano не настроена" };
   // Поля сигнала (kind/side/param/st/t1/t2) — для НЕЗАВИСИМОГО судьи verifyPick перед боевым кликом.
   pendingBet.set("betano", { outcomeId: c.outcomeId, expectedOdds: c.expectedOdds, desc: c.desc, descFull: c.descFull || c.subject || c.desc, subject: c.subject,
-    kind: c.kind, side: c.side, param: c.param, st: c.st, t1: c.t1, t2: c.t2, betanoSelId: c.betanoSelId || "" });
+    kind: c.kind, side: c.side, param: c.param, st: c.st, sportType: c.sportType, t1: c.t1, t2: c.t2, betanoSelId: c.betanoSelId || "" });
   // Octo-режим: антидетект/прокси/логин — внутри Octo-профиля, открываем betano.bg в Octo-странице.
   // Иначе — наш Electron-антидетект (запасной путь). Адаптер кладётся в octoWins → placeBet берёт его через bookerWin.
   if (settings.octoMode) {

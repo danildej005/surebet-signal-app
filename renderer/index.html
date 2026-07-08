@@ -40,10 +40,11 @@
     <h2>🎯 Value-режим (прематч)</h2>
     <p class="muted">Эталон Pinnacle (снимаем маржу) vs Betano — оба плеча из одного live-фида (bettingco). Ставит ОДИНОЧКУ на betano.bg, когда Betano выгоднее честной линии на заданный порог. Включается тумблером ниже.</p>
     <label>Ключ Betano-фида (bettingco, X-Api-Key)<input id="bettingcoKey" type="text" placeholder="вставь ключ" autocomplete="off" /></label>
-    <div class="subbox">
-      <div class="muted">Включи спорт галочкой — бот сканирует ВСЕ его лиги автоматически и сам добавляет новые. Ниже видны все лиги (включены); сними галочку, чтобы исключить лигу. Нужен сохранённый ключ Betano-фида.</div>
+    <details class="subbox">
+      <summary class="muted">Спорты/лиги старого источника (oddspapi) — <b>не используется</b>: сканер bettingco берёт все спорты фида автоматически</summary>
+      <div class="muted">Секция оставлена для истории. «oddspapi: таймаут /tournaments» здесь безвреден — текущий детект/ставки от секции не зависят.</div>
       <div id="valueSports"></div>
-    </div>
+    </details>
     <div class="subbox">
       <div class="muted">Маркеты — что ставим (сними галочку, чтобы исключить)</div>
       <div id="valueMarkets"></div>

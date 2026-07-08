@@ -40,6 +40,25 @@ test("TOTAL: условный тотал со счётом («… 3-0») — б�
   assert.equal(verifyPick(sig({ kind: "TOTAL", side: "B", param: "41.5", expectedOdds: 2.12 }), { text: "Under 41.5 2.10", odds: 2.1 }).ok, true); // чистый матчевый — проходит
 });
 
+const { verifySlipMarket } = require("../lib/bookers.cjs");
+test("судья-купон: ярлык рынка Betano vs сигнал (реальные slipText из боевых квитанций)", () => {
+  // совпадения — проходят
+  assert.equal(verifySlipMarket({ kind: "SPREAD", st: "/Main/Main", sportType: 3 }, "Benito Sanchez Martinez -1.5 2.10 Match Handicap (Set) Marvin Moeller Benito Sanchez Martinez 0 0 0 3").ok, true);
+  assert.equal(verifySlipMarket({ kind: "SPREAD", st: "/Main/Main/Game", sportType: 3 }, "Clara Burel +5.5 1.78 Handicap Games Petra Marcinko Clara Burel").ok, true);
+  assert.equal(verifySlipMarket({ kind: "TOTAL", st: "/Main/Main/Game", sportType: 3 }, "Under 22.5 1.85 Games Matthew Thomson Benjamin Thomas George").ok, true);
+  assert.equal(verifySlipMarket({ kind: "ML", st: "/Main/Main", sportType: 29 }, "Bounty Hunters Winner Bounty Hunters MIBR Academy 0 0").ok, true);
+  // подмены — блок (класс Alice: сигнал ML, в купоне гейм-проп)
+  assert.equal(verifySlipMarket({ kind: "ML", st: "/Main/Main", sportType: 3 }, "Alice Tubello 2.02 Game Winner (Set 2, Game 10) Alice Tubello Yufei Ren").ok, false);
+  assert.equal(verifySlipMarket({ kind: "SPREAD", st: "/Main/Main", sportType: 3 }, "Clara Burel +1.5 1.78 Handicap Games …").ok, false);      // сет-сигнал ↔ гейм-фора
+  assert.equal(verifySlipMarket({ kind: "SPREAD", st: "/Main/Main/Game", sportType: 3 }, "X -1.5 2.10 Match Handicap (Set) …").ok, false);     // гейм-сигнал ↔ сет-фора
+  assert.equal(verifySlipMarket({ kind: "TOTAL", st: "/Main/Main/Game", sportType: 3 }, "Naomi Mckenzie 3.80 Winner …").ok, false);            // тотал ↔ победа
+  assert.equal(verifySlipMarket({ kind: "ML", st: "/Main/Main", sportType: 3 }, "Kajsa -4.5 1.62 Handicap Games …").ok, false);                 // победа ↔ фора
+  // не распознали ярлык → skip, не блокируем (словарь неполный, новые спорты)
+  const sk = verifySlipMarket({ kind: "ML", st: "/Main/Main", sportType: 1 }, "Team A 1.50 что-то новое");
+  assert.equal(sk.ok, true); assert.equal(sk.skip, true);
+  assert.equal(verifySlipMarket({ kind: "ML" }, "").skip, true); // пустой slipText — нечем судить
+});
+
 test("Кэф грубо мимо / нет типа сигнала", () => {
   assert.equal(verifyPick(sig({ kind: "TOTAL", side: "A", param: "18.5", expectedOdds: 1.2 }), { text: "Over 18.5 5.00", odds: 5.0 }).ok, false); // кэф далёк
   const skip = verifyPick({ expectedOdds: 2 }, { text: "что-то 2.00", odds: 2 });
