@@ -294,24 +294,26 @@ async function openOctoBooker(profile, overrideUrl) {
     win = r.win; win.__browser = r.browser;
     octoWins.set(id, win);
     try { r.browser.on("disconnected", () => { octoWins.delete(id); logger.log("INFO", "Octo: соединение разорвано", id); }); } catch { /* ignore */ }
-    // ЭКОНОМИЯ ПРОКСИ-ТРАФИКА v3: блокируем ТОЛЬКО live-видео/аудио-потоки (автостартуют на Betano и не
-    // кэшируются в принципе — мегабайты/мин через прокси). Картинки/шрифты НЕ трогаем: их держит HTTP-кэш
-    // (перехвата больше нет → кэш жив, бандлы качаются один раз). v2 (блок и картинок/шрифтов, 52 паттерна)
-    // давал СУПЕРДОЛГУЮ загрузку страниц — откатили до минимального видео-списка. Тумблер в панели: выкл =
-    // вообще без CDP-блокировки (диагностический режим, если и видео-блок замедлит).
+    // ЭКОНОМИЯ ПРОКСИ-ТРАФИКА: МЕХАНИЗМ 0.10.29 (перехват) — вернули по требованию владельца: CDP-вариант
+    // (setBlockedURLs, 0.10.30-31) вешал/сильно тормозил загрузку страниц на Octo. Перехват режет картинки/
+    // шрифты (по типу) и видео-стримы (по расширению) в ГЛАВНОМ фрейме; iframe логина не трогаем. Цена: перехват
+    // отключает HTTP-кэш (бандлы качаются на каждой загрузке) — трафик ~1ГБ/сутки; решать НЕ кодом: блокировка
+    // видео-доменов на стороне прокси/Octo-профиля (см. BACKLOG). Тумблер панели: выкл = без перехвата вовсе.
     try {
       const page = win.page;
       if (page && !win.__resBlock && settings.octoBlockResources !== false) {
         win.__resBlock = true;
-        const exts = ["m3u8", "mpd", "ts", "m4s", "mp4", "m4v", "webm", "ogv", "mp3", "m4a", "aac", "ogg"]; // .ts = HLS-сегменты (TypeScript в прод не раздают)
-        const urls = [];
-        for (const e of exts) { urls.push("*." + e); urls.push("*." + e + "?*"); }
-        urls.push("*/hls/*", "*/dash/*"); // сегменты стримов без расширения в пути (напр. …/hls/segment?...)
-        const cdp = await page.target().createCDPSession();
-        await cdp.send("Network.enable");
-        await cdp.send("Network.setBlockedURLs", { urls });
-        await cdp.send("Network.setCacheDisabled", { cacheDisabled: false }); // кэш явно ВКЛ
-        logger.log("INFO", "Octo: блок ресурсов v3 (ТОЛЬКО видео/аудио-стримы; картинки/шрифты в кэше; HTTP-КЭШ ЖИВ)");
+        const BLOCK_EXT = /\.(m3u8|mpd|ts|m4s|mp4|m4v|mov|webm|ogv|mp3|m4a|aac|ogg)(\?|#|$)/i; // только видео/аудио-стримы
+        await page.setRequestInterception(true);
+        page.on("request", (req) => {
+          try {
+            let sub = false; try { sub = !!req.frame() && req.frame() !== page.mainFrame(); } catch { /* нет фрейма → считаем главным */ }
+            const t = req.resourceType(), u = req.url();
+            if (!sub && (t === "image" || t === "media" || t === "font" || BLOCK_EXT.test(u))) req.abort().catch(() => {});
+            else req.continue().catch(() => {});
+          } catch { try { req.continue(); } catch { /* ignore */ } }
+        });
+        logger.log("INFO", "Octo: блок ресурсов (механизм 0.10.29: перехват image/media/font + видео; iframe логина не трогаем)");
       } else if (page && !win.__resBlock) {
         win.__resBlock = true;
         logger.log("INFO", "Octo: блок ресурсов ВЫКЛЮЧЕН тумблером — страница грузит всё (видео будет есть прокси-трафик)");
