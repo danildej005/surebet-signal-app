@@ -1,5 +1,6 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
+const MARGIN_SPORTS = [3, 1, 29, 30, 31, 32, 4, 5, 9]; // sportType с пер-спорт фильтром маржи в панели (id инпутов margin_<t>)
 
 // Версия приложения в шапке — чтобы точно видеть, что сейчас в работе (через IPC).
 try { if (window.api && window.api.getVersion) window.api.getVersion().then((v) => { if (v && $("appVer")) $("appVer").textContent = "v" + v; }).catch(() => {}); } catch (e) { /* ignore */ }
@@ -23,6 +24,9 @@ function renderStatus(s) {
     if ($("valueThresholdMax")) $("valueThresholdMax").value = Math.round((v.valueMax != null ? v.valueMax : 0.25) * 1000) / 10; // потолок value, доля → %
     if ($("keepAliveSec")) $("keepAliveSec").value = Math.round((v.keepAliveMs != null ? v.keepAliveMs : 180000) / 1000); // мс → сек
     if ($("octoBlockResources")) $("octoBlockResources").checked = v.octoBlockResources !== false; // блок live-видео (экономия прокси)
+    // маржа-фильтр по спортам: {sportType: доля} → инпуты в % (пусто = без фильтра)
+    const mbs = v.valueMarginBySport || {};
+    for (const t of MARGIN_SPORTS) { const el = $("margin_" + t); if (el) el.value = mbs[t] != null ? Math.round(mbs[t] * 1000) / 10 : ""; }
     $("valueOddsMin").value = v.valueOddsMin || "";
     $("valueOddsMax").value = v.valueOddsMax || "";
     if (v.valueStake) $("valueStake").value = v.valueStake;
@@ -176,6 +180,7 @@ function saveValue() {
     valuePlace: $("valuePlace") ? $("valuePlace").checked : false,
     valuePlaceRequireArb: $("valuePlaceRequireArb") ? $("valuePlaceRequireArb").checked : false,
     octoBlockResources: $("octoBlockResources") ? $("octoBlockResources").checked : true, // блок live-видео (экономия прокси; применяется при след. подключении Octo)
+    valueMarginBySport: (() => { const m = {}; for (const t of MARGIN_SPORTS) { const el = $("margin_" + t); const n = el ? Number(el.value) : 0; if (n > 0) m[t] = n / 100; } return m; })(), // % → доля; пусто = без фильтра
     valuePlaceKinds: ($("valuePlaceMlOnly") && $("valuePlaceMlOnly").checked) ? ["ML"] : [],
     valueSports: valueSportsState.map((s) => ({ key: s.key, name: s.name, oa: s.oa, ps: s.ps, on: !!s.on, exclude: Array.isArray(s.exclude) ? s.exclude : [] })),
     valueMarkets: valueMarketsState.slice(),
@@ -193,6 +198,17 @@ if ($("valuePlace")) $("valuePlace").onchange = () => saveValue().then(() => { $
 if ($("valuePlaceRequireArb")) $("valuePlaceRequireArb").onchange = () => saveValue().catch(() => {});
 if ($("valuePlaceMlOnly")) $("valuePlaceMlOnly").onchange = () => saveValue().catch(() => {});
 if ($("octoBlockResources")) $("octoBlockResources").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("octoBlockResources").checked ? "видео-блок ВКЛ (применится при след. подключении Octo)" : "видео-блок ВЫКЛ (перезапусти Octo-окно)"; }).catch(() => {});
+// АВТО-СОХРАНЕНИЕ ВСЕЙ СЕКЦИИ: любое изменение поля/галочки в карточке value сохраняет конфиг сразу —
+// владелец терял настройки, меняя поля без «Сохранить конфиг» и перезапуская приложение.
+(() => {
+  const card = document.getElementById("valueCard");
+  if (!card) return;
+  let t = null;
+  card.addEventListener("change", () => {
+    clearTimeout(t);
+    t = setTimeout(() => saveValue().then(() => { const r = $("valueResult"); if (r && !r.textContent) r.textContent = "💾 конфиг сохранён"; }).catch(() => {}), 400);
+  });
+})();
 
 // Старт/стоп value-сессии — ОТДЕЛЬНАЯ кнопка (тумблеры её не запускают). Перед стартом сохраняем конфиг.
 let valueSessionOn = false;

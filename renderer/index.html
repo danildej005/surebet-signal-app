@@ -62,6 +62,20 @@
       <label>Кэф до<input id="valueOddsMax" type="number" min="0" step="0.05" placeholder="0 = без границы" /></label>
     </div>
     <label>Лимит ставок в сутки<input id="valueMaxPerDay" type="number" min="0" step="1" placeholder="20" /></label>
+    <div class="subbox">
+      <div class="muted">Макс. маржа Pinnacle по спортам, % (пусто = без фильтра; сигнал с маржой эталона выше — режется). Ориентиры: теннис 4–5%, кибер 6.5–10%</div>
+      <div class="grid2">
+        <label>Теннис<input id="margin_3" type="number" min="0" step="0.5" placeholder="—" /></label>
+        <label>Футбол<input id="margin_1" type="number" min="0" step="0.5" placeholder="—" /></label>
+        <label>CS<input id="margin_29" type="number" min="0" step="0.5" placeholder="—" /></label>
+        <label>Dota<input id="margin_30" type="number" min="0" step="0.5" placeholder="—" /></label>
+        <label>LoL<input id="margin_31" type="number" min="0" step="0.5" placeholder="—" /></label>
+        <label>Valorant<input id="margin_32" type="number" min="0" step="0.5" placeholder="—" /></label>
+        <label>Баскетбол<input id="margin_4" type="number" min="0" step="0.5" placeholder="—" /></label>
+        <label>Волейбол<input id="margin_5" type="number" min="0" step="0.5" placeholder="—" /></label>
+        <label>Бейсбол<input id="margin_9" type="number" min="0" step="0.5" placeholder="—" /></label>
+      </div>
+    </div>
     <label class="liverow"><input type="checkbox" id="octoBlockResources" checked /> 📉 Резать <b>live-видео</b> на страницах Betano (автостартует и жрёт прокси; выключай только для диагностики скорости)</label>
     <div class="muted" style="margin-top:6px;">Доп-ставки (0 = только первая, N = ещё N сверх). Все три НЕЗАВИСИМЫ — ставка проходит, только если укладывается во ВСЕ:</div>
     <div class="grid2">

@@ -107,6 +107,21 @@ test("eventSync v2: слепой счёт и тикающие виды не бл
   assert.equal(ev("A", "6-2, 5-2", "A", "6-2, 5-2", 3).sync, true);
 });
 
+test("scanValue: фильтр маржи НА СПОРТ (marginBySport) — кибер режется своим порогом, теннис живёт общим", () => {
+  const mk = (st, t) => ({ // Pinnacle 1.85/1.85 → маржа 8.1%; Betano 2.05/1.9 → value стороны A = 2.05×0.5−1 = +2.5%
+    gamesOriginModel: { model: { g: { team1NameEn: "A", team2NameEn: "B", textId: "/x/1", sportType: t, currentScore: "", leagueName: "L", link: "u" } } },
+    marketsOriginModel: { model: {
+      m1: { gameTextId: "/x/1", surebetTextId: "/Main/Main", meta: st === "b" ? "Winner | A" : "9|0|MONEYLINE|TEAM1||0|3", marketValue: st === "b" ? 2.05 : 1.85, marketParameter: 0 },
+      m2: { gameTextId: "/x/1", surebetTextId: "/Main/Main", meta: st === "b" ? "Winner | B" : "9|0|MONEYLINE|TEAM2||0|3", marketValue: st === "b" ? 1.9 : 1.85, marketParameter: 0 },
+    } },
+  });
+  const opts = { threshold: 0.0001, maxPlausible: 0.5, marginMax: 0.15 };
+  // кибер (29): свой жёсткий порог 5% < маржи рынка (~8.6%) → сигналов НЕТ
+  assert.equal(bc.scanValue(mk("b", 29), mk("p", 29), { ...opts, marginBySport: { 29: 0.05 } }).length, 0);
+  // теннис (3): ключа в карте нет → общий 15% → сигналы ЕСТЬ
+  assert.ok(bc.scanValue(mk("b", 3), mk("p", 3), { ...opts, marginBySport: { 29: 0.05 } }).length > 0);
+});
+
 test("devig2: снимает маржу, сумма вероятностей 1", () => {
   const [a, b] = bc.devig2(1.5, 2.5);
   assert.ok(near(a + b, 1));
