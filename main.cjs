@@ -2053,39 +2053,18 @@ function pushStatus() {
   refreshTray();
 }
 function maskedSettings() {
+  // ВСЕ несекретные поля отдаём панели АВТОМАТИЧЕСКИ (спред) — раньше ручной список забывал новые поля
+  // (keepAliveMs, valueMax, valuePlace*, octoBlockResources, valueMarginBySport…): они СОХРАНЯЛИСЬ в файл,
+  // но панель их не получала и рисовала дефолты → «ничего не сохранилось» у владельца.
+  // bookers — не сюда (внутри пароли/прокси контор, у панели свой канал); tgToken — маской.
+  const { tgToken, bookers, ...rest } = settings;
   return {
-    tgToken: settings.tgToken ? settings.tgToken.slice(0, 6) + "…" : "",
-    tgChat: settings.tgChat || "",
-    tgApiBase: settings.tgApiBase || "https://api.telegram.org",
-    proxy: settings.proxy || "",
-    pollMs: settings.pollMs,
-    keyword: settings.keyword,
-    liveMode: !!settings.liveMode,
-    vilkaLimitEur: settings.vilkaLimitEur || 0,
-    hasToken: !!settings.tgToken,
-    // VALUE-режим (ключи показываем целиком — его машина)
-    bettingcoKey: settings.bettingcoKey || "",   // ключ Betano-фида bettingco (X-Api-Key)
+    ...rest,
+    tgToken: tgToken ? tgToken.slice(0, 6) + "…" : "",
+    hasToken: !!tgToken,
     hasBettingcoKey: !!settings.bettingcoKey,
     hasOddsApiKey: !!settings.oddsApiKey,
-    oddsApiKey: settings.oddsApiKey || "",   // УСТАРЕЛ (миграция)
-    ps3838Auth: settings.ps3838Auth || "",   // УСТАРЕЛ (миграция)
-    valueMode: !!settings.valueMode,
-    valueLive: !!settings.valueLive,
-    valueThreshold: settings.valueThreshold != null ? settings.valueThreshold : 0.05,
-    valueStake: settings.valueStake || 0,
-    valueMaxPerDay: settings.valueMaxPerDay != null ? settings.valueMaxPerDay : 20,
-    valueRefSource: settings.valueRefSource || "ps3838",
-    valueOddsMin: settings.valueOddsMin || 0,
-    valueOddsMax: settings.valueOddsMax || 0,
-    valueSports: settings.valueSports || [],
-    valueMarkets: settings.valueMarkets || [],
     hasPs3838: !!settings.ps3838Auth,
-    // OCTO Browser (антидетект для Betano)
-    octoMode: !!settings.octoMode,
-    octoApiUrl: settings.octoApiUrl || "http://127.0.0.1:58888",
-    octoProfileId: settings.octoProfileId || "",  // UUID профиля — видим (его машина)
-    octoExePath: settings.octoExePath || "",      // путь к Octo.exe для автозапуска
-    octoToken: settings.octoToken || "",          // токен Cloud API — видим
     hasOctoToken: !!settings.octoToken,
   };
 }
@@ -2705,6 +2684,8 @@ if (!gotLock) {
 
     try {
       settings = settingsStore.load();
+      if (settingsStore.getLastLoadError && settingsStore.getLastLoadError())
+        logger.log("ERROR", "🔴 настройки: settings.enc не расшифровался (" + settingsStore.getLastLoadError() + ") — битый файл сохранён рядом (.broken-*), несекретные поля восстановлены из settings-backup.json");
       dedupe = makeDeduper({ ttlMs: settings.dedupeTtlMs, file: join(app.getPath("userData"), "seen.json") });
 
       logger.onLine((line) => { if (dashboardWin && !dashboardWin.isDestroyed()) try { dashboardWin.webContents.send("log", line); } catch { /* ignore */ } });
