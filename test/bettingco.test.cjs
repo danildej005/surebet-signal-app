@@ -89,6 +89,24 @@ test("betanoOutcomes: ЕВРОПЕЙСКИЙ хендикап (3-way с ничь
   assert.equal(sigs.filter((s) => s.kind === "SPREAD").length, 0);
 });
 
+test("eventSync v2: слепой счёт и тикающие виды не блокируются, реальный рассинхрон — блок (реальные пары 10-11.07)", () => {
+  const ev = (tB, sB, tP, sP, sport) => bc.eventSync(
+    { team1NameEn: "A", team2NameEn: "B", currentScore: sB, sportType: sport },
+    { team1NameEn: "A", team2NameEn: "B", currentScore: sP, sportType: sport });
+  // Pinnacle не ведёт счёт («0-0» при живом B) — Dota/Valorant/волейбол: НЕ рассинхрон
+  assert.equal(ev("A", "0-1", "A", "0-0", 30).sync, true);
+  assert.equal(ev("A", "20-25", "A", "0-0", 5).sync, true);
+  assert.equal(ev("A", "1-0", "A", "", 1).sync, true);            // пусто = данных нет
+  // Баскет: лаг снапшота на 2 очка — НЕ рассинхрон (допуск 3)
+  assert.equal(ev("A", "46-43", "A", "46-45", 4).sync, true);
+  assert.equal(ev("A", "39-25", "A", "39-27", 4).sync, true);
+  assert.equal(ev("A", "46-40", "A", "46-45", 4).sync, false);    // 5 очков — уже реальный рассинхрон
+  // Футбол/теннис — строго: гол/гейм лага = рассинхрон (рынки радикально меняются)
+  assert.equal(ev("A", "3-1", "A", "2-1", 1).sync, false);
+  assert.equal(ev("A", "6-2, 5-2", "A", "6-2, 4-2", 3).sync, false);
+  assert.equal(ev("A", "6-2, 5-2", "A", "6-2, 5-2", 3).sync, true);
+});
+
 test("devig2: снимает маржу, сумма вероятностей 1", () => {
   const [a, b] = bc.devig2(1.5, 2.5);
   assert.ok(near(a + b, 1));
