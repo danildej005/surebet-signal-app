@@ -43,6 +43,8 @@ test("teamKey: мировой бейсбол — US-алиасы городов,
   assert.equal(bc.teamKey("Tigres del Licey"), bc.teamKey("Licey Tigres"));
   // KBO: бренд-буквы различают команды — не режем
   assert.notEqual(bc.teamKey("LG Twins"), bc.teamKey("KT Twins"));
+  // NPB: спонсорская вставка DeNA + слитное/раздельное написание (реальная потеря 14-16 снимков/сутки)
+  assert.equal(bc.teamKey("Yokohama DeNA Baystars"), bc.teamKey("Yokohama Bay Stars"));
 });
 
 test("matchEvents: SUBSET-фолбэк (NPB-префикс региона) — склейка ЕДИНСТВЕННОГО кандидата, отказ при двух", () => {

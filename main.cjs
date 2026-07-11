@@ -769,11 +769,17 @@ async function selectLegOutcome(id, opts = {}) {
     // «одна сторона на обоих плечах» и лог видели КОМАНДУ, а не только «+1.5 1.632».
     selected = (choice.team && !choice.text.toLowerCase().includes(choice.team.toLowerCase()) ? choice.team + " " : "") + choice.text;
     selectedOdds = choice.odds; how = choice.how; pickedIndex = choice.i;
-    // РАННИЙ ГЕЙТ КЭФА: кэф выбранной кнопки известен ДО клика (из текста). Уехал ниже допуска → НЕ открываем купон,
-    // не читаем макс, не пишем сумму — просто скип (иначе зря дёргаем купон и рискуем накоплением экспресса).
+    // РАННИЙ ГЕЙТ: кэф выбранной кнопки известен ДО клика (из текста). ПРАВИЛО ВЛАДЕЛЬЦА: величина просадки
+    // НЕ ВАЖНА — важен ОСТАТОЧНЫЙ value по РЕАЛЬНОЙ цене: цена×свежий_fair−1 ≥ порога панели → ставим.
+    // (раньше жёсткий допуск 1.5% выбрасывал половину годных: сигнал +7% при просадке 3% всё ещё несёт +4%).
+    // Свежего fair нет (вилочный путь) → старый допуск по кэфу.
     if (opts.earlyOddsGate) {
       const eo = Number(bet.expectedOdds) || 0, co = Number(selectedOdds) || 0;
-      if (eo && co && co < eo * (1 - ODDS_TOLERANCE)) return { ok: false, win, cfg, bet, selected, selectedOdds, how, oddsOk: false, error: "кэф уехал до купона: " + co + " < ожид " + eo + " (купон не открывали)" };
+      if (bet.fair && bet.minValue != null && co) {
+        const residual = co * bet.fair - 1;
+        if (residual < bet.minValue) return { ok: false, win, cfg, bet, selected, selectedOdds, how, oddsOk: false, error: "остаточный value " + (residual * 100).toFixed(1) + "% < порога " + (bet.minValue * 100).toFixed(1) + "% (кэф " + co + ", купон не открывали)" };
+        logger.log("INFO", "  [остаточный value] кнопка " + co + " × fair → +" + (residual * 100).toFixed(1) + "% ≥ порога — идём в купон");
+      } else if (eo && co && co < eo * (1 - ODDS_TOLERANCE)) return { ok: false, win, cfg, bet, selected, selectedOdds, how, oddsOk: false, error: "кэф уехал до купона: " + co + " < ожид " + eo + " (купон не открывали)" };
     }
     try {
       const clicked = await win.webContents.executeJavaScript(`(() => { const els = [...document.querySelectorAll(${JSON.stringify(sel)})]; const el = els[${Number(choice.i)}]; if (el) { el.click(); return true; } return false; })()`);
@@ -797,8 +803,11 @@ async function selectLegOutcome(id, opts = {}) {
   // Макс НЕ читаем при skipMax (value: фикс-стейк, лимит не нужен + клик MAX пачкал поле «непонятной суммой»).
   const maxStake = (cfg.outcomeSel && !opts.skipMax) ? await readBookmakerMax(win, id) : null;
   const exp = bet.expectedOdds;
-  const oddsOk = (exp && selectedOdds) ? (selectedOdds >= exp * (1 - ODDS_TOLERANCE)) : null;
-  return { ok: true, win, cfg, bet, selected, selectedOdds, how, maxStake, expectedOdds: exp || null, oddsOk, selectedIndex: pickedIndex };
+  // oddsOk: при свежем fair — по ОСТАТОЧНОМУ value (правило владельца), иначе по допуску кэфа (вилочный путь)
+  const oddsOk = (bet.fair && bet.minValue != null && selectedOdds) ? (selectedOdds * bet.fair - 1 >= bet.minValue)
+    : (exp && selectedOdds) ? (selectedOdds >= exp * (1 - ODDS_TOLERANCE)) : null;
+  let curUrl = ""; try { curUrl = win.webContents.getURL(); } catch { /* ignore */ }
+  return { ok: true, win, cfg, bet, selected, selectedOdds, how, maxStake, expectedOdds: exp || null, oddsOk, selectedIndex: pickedIndex, eventUrl: curUrl };
 }
 
 // Снять свой выбор (повторный клик по той же кнопке-исходу = убрать из купона). Чтобы купон не
@@ -1025,13 +1034,19 @@ async function placeBet(id, stake, live = false, opts = {}) {
   const slipOdds = slipOddsFromBtn(r.placeBtnText, stake);
   r.slipOdds = slipOdds;
   const expOdds = Number(s.expectedOdds) || null;
-  // Гейт цены купона В ОБЕ СТОРОНЫ: вниз — кэф уехал (допуск 1.5%); ВВЕРХ +25% — цена кнопки неправдоподобно
-  // выше выбора = в купоне НЕ ОДНА ставка (экспресс: winnings = произведение кэфов) или чужой рынок.
-  const slipOddsOk = (slipOdds && expOdds)
-    ? (slipOdds >= expOdds * (1 - ODDS_TOLERANCE) && slipOdds <= expOdds * 1.25)
-    : null; // null = цену купона не прочитать → не блокируем (кнопку исхода уже проверили)
+  // Гейт цены купона: вниз — по ОСТАТОЧНОМУ value (правило владельца: цена×fair−1 ≥ порога панели; без fair —
+  // старый допуск 1.5%); ВВЕРХ +25% против цены ВЫБОРА — анти-экспресс (winnings = произведение кэфов) / чужой рынок.
+  const bet0 = s.bet || {};
+  const upRef = Number(r.selectedOdds) || expOdds;
+  const slipTooHigh = !!(slipOdds && upRef && slipOdds > upRef * 1.25);
+  const slipOddsOk = (slipOdds == null) ? null
+    : slipTooHigh ? false
+    : (bet0.fair && bet0.minValue != null) ? (slipOdds * bet0.fair - 1 >= bet0.minValue)
+    : (expOdds ? (slipOdds >= expOdds * (1 - ODDS_TOLERANCE)) : null);
   r.slipOddsOk = slipOddsOk;
-  if (slipOdds && expOdds && slipOdds > expOdds * 1.25) logger.log("WARN", "  [value] цена купона ПОДОЗРИТЕЛЬНО выше выбора: " + slipOdds + " vs " + expOdds + " — возможен экспресс/чужой рынок, блок");
+  if (slipTooHigh) logger.log("WARN", "  [value] цена купона ПОДОЗРИТЕЛЬНО выше выбора: " + slipOdds + " vs " + upRef + " — возможен экспресс/чужой рынок, блок");
+  else if (slipOdds && bet0.fair && bet0.minValue != null && slipOddsOk === false)
+    logger.log("WARN", "  [value] пропуск: остаточный value купона " + ((slipOdds * bet0.fair - 1) * 100).toFixed(1) + "% < порога " + (bet0.minValue * 100).toFixed(1) + "%");
   // СЧЁТ ВЫБОРОВ в купоне: кэфы пишутся с ДВУМЯ знаками (2.10), линии — с одним (22.5) → число «X.YZ» в
   // тексте купона до «€» = число выборов. Больше одного → НЕ кликаем и чистим (защита от экспресса).
   const slipSelCount = ((String(r.slipText || "").split("€")[0] || "").match(/\b\d+\.\d\d\b/g) || []).length;
@@ -1091,6 +1106,7 @@ async function placeBet(id, stake, live = false, opts = {}) {
       logger.log("ERROR", "🔴 [value] боевой клик, но квитанция НЕ подтвердила ставку — ставим на КОНТРОЛЬ позднего приёма (Betano бывает доводит ставку минутами)");
       // ПОЗДНИЙ ПРИЁМ: цели-winnings, по которым контролёр (checkLateAccepts) опознает ставку задним числом.
       r.slipBefore = before;
+      r.eventUrl = s.eventUrl || ""; // страница события ставки: контролёр видит ставку ТОЛЬКО на её странице
       const tgts = new Set();
       for (const o of [slipOdds, r.selectedOdds, slipOddsFromBtn(r.placeBtnText, stake)]) if (o) tgts.add(Math.round(o * Number(stake) * 100) / 100);
       r.lateTargets = [...tgts];
@@ -1098,9 +1114,13 @@ async function placeBet(id, stake, live = false, opts = {}) {
     await captureBetslip(s.win, s.cfg, r.placed); // диаг-снимок квитанции — продолжаем собирать разметку
   }
   else if (live && r.hasPlaceBtn && s.oddsOk !== false && verdict.ok && slipOddsOk === false) {
-    // (A) цена купона (BET NOW) уехала ниже допуска → НЕ ставим (реальный кэф хуже сигнала)
-    r.error = "кэф в купоне уехал: " + slipOdds.toFixed(2) + " < ожид " + expOdds + " (допуск " + (ODDS_TOLERANCE * 100) + "%)";
-    logger.log("WARN", "  [value] пропуск (кэф купона уехал): " + r.error);
+    // цена купона не прошла гейт: остаточный value < порога (или анти-экспресс) → НЕ ставим
+    r.error = slipTooHigh
+      ? "цена купона подозрительно выше выбора: " + slipOdds + " vs " + upRef + " (анти-экспресс)"
+      : (bet0.fair && bet0.minValue != null)
+        ? "остаточный value купона " + ((slipOdds * bet0.fair - 1) * 100).toFixed(1) + "% < порога " + (bet0.minValue * 100).toFixed(1) + "%"
+        : "кэф в купоне уехал: " + slipOdds.toFixed(2) + " < ожид " + expOdds;
+    logger.log("WARN", "  [value] пропуск (гейт купона): " + r.error);
   }
   else if (live && r.hasPlaceBtn && s.oddsOk !== false && !verdict.ok) r.error = "судья заблокировал: " + verdict.reason;
   else if (live && r.hasPlaceBtn && s.oddsOk !== false && !slipVerdict.ok) r.error = "судья-купон заблокировал: " + slipVerdict.reason;
@@ -1491,21 +1511,23 @@ async function checkLateAccepts() {
   if (!win || win.isDestroyed()) return;
   let rows;
   try { rows = await readSlipBets(win); } catch { return; }
-  // ДИАГ СЛЕПОТЫ (0/26 за 08-07): что контролёр реально ВИДИТ на текущей странице — открытые ставки чужих
-  // событий могут не отображаться. По этим логам решим, как читать надёжно (вкладка Open Bets / другой источник).
-  try {
-    let u = ""; try { u = win.webContents.getURL(); } catch { /* ignore */ }
-    logger.log("INFO", "  [поздний приём] контроль: жду " + valueLatePending.length + " шт | вижу строк ставок: " + rows.length +
-      (rows.length ? " [" + rows.slice(0, 3).join("; ") + "]" : "") + " | стр: …" + String(u).slice(-45));
-  } catch { /* ignore */ }
+  // Ставка видна ТОЛЬКО на странице СВОЕГО события (доказано диагом 10-07: «жду 3, вижу 0» на чужой странице).
+  // Сверяем цель, лишь когда окно оказалось на её событии (id в URL); WARN 30-мин — только если событие
+  // посещали, а цель так и не появилась. Иначе — ждём дольше (до 2ч), не хороним вслепую.
+  let curUrl = ""; try { curUrl = win.webContents.getURL(); } catch { /* ignore */ }
   const now = Date.now();
   for (let i = valueLatePending.length - 1; i >= 0; i--) {
     const p = valueLatePending[i];
-    if (now - p.ts > 30 * 60 * 1000) {
+    const onPage = p.eventId && curUrl.includes(p.eventId);
+    if (onPage) p.visited = (p.visited || 0) + 1;
+    const deadline = p.visited ? 30 * 60 * 1000 : 2 * 3600 * 1000;
+    if (now - p.ts > deadline) {
       valueLatePending.splice(i, 1);
-      logger.log("WARN", "[value] ⚠️ поздний приём НЕ подтвердился за 30 мин: " + p.selected + " — сверь историю Betano вручную");
+      logger.log("WARN", "[value] ⚠️ поздний приём НЕ подтвердился (" + (p.visited ? "страницу посещали" : "страницу так и не посетили") + "): " + p.selected + " — сверь историю Betano вручную");
       continue;
     }
+    if (!onPage) continue; // на чужой странице цель не видна — не судим
+    logger.log("INFO", "  [поздний приём] на странице события цели «" + p.selected + "»: вижу строк " + rows.length + (rows.length ? " [" + rows.slice(0, 3).join("; ") + "]" : ""));
     const fresh = newSlipBets(p.before, rows).map((k) => k.split("|").map(parseMoney))
       .filter(([st, w]) => st != null && w != null && Math.abs(st - p.stake) < 0.011 && p.targets.some((t) => Math.abs(w - t) < 0.011));
     if (!fresh.length) continue;
@@ -1695,7 +1717,8 @@ async function tryPlaceFromValueSignals(sigs) {
     if (live && res && !res.placed && Array.isArray(res.lateTargets) && res.lateTargets.length) {
       valueLatePending.push({ key: c.key, desc: c.desc, t1: c.t1, t2: c.t2, value: c.value,
         selected: res.selected, stake: Number(c.stake) || 0, targets: res.lateTargets,
-        before: res.slipBefore || [], ts: Date.now() });
+        before: res.slipBefore || [], ts: Date.now(),
+        eventId: (String(res.eventUrl || c.url || "").match(/\/(\d{6,})\/?/) || [])[1] || "" }); // id события: сверять только на ЕГО странице
       logger.log("INFO", "  [поздний приём] на контроле: " + res.selected + " (жду winnings " + res.lateTargets.join("/") + "€ до 30 мин)");
     }
     // ПАУЗА между попытками (держим valuePlaceBusy → следующая не стартует): успех — 10с, отказ — 3с. Купон уже
@@ -1815,7 +1838,8 @@ async function runValueCycle(c, live) {
   if (!booker) return { ok: false, error: "контора betano не настроена" };
   // Поля сигнала (kind/side/param/st/t1/t2) — для НЕЗАВИСИМОГО судьи verifyPick перед боевым кликом.
   pendingBet.set("betano", { outcomeId: c.outcomeId, expectedOdds: c.expectedOdds, desc: c.desc, descFull: c.descFull || c.subject || c.desc, subject: c.subject,
-    kind: c.kind, side: c.side, param: c.param, st: c.st, sportType: c.sportType, t1: c.t1, t2: c.t2, betanoSelId: c.betanoSelId || "" });
+    kind: c.kind, side: c.side, param: c.param, st: c.st, sportType: c.sportType, t1: c.t1, t2: c.t2, betanoSelId: c.betanoSelId || "",
+    fair: c.freshFair || null, minValue: c.minValue != null ? c.minValue : null }); // свежий fair + порог панели → гейт ОСТАТОЧНОГО value
   // Octo-режим: антидетект/прокси/логин — внутри Octo-профиля, открываем betano.bg в Octo-странице.
   // Иначе — наш Electron-антидетект (запасной путь). Адаптер кладётся в octoWins → placeBet берёт его через bookerWin.
   if (settings.octoMode) {
@@ -1855,7 +1879,13 @@ async function runValueCycle(c, live) {
       if (fv == null || fv < thr) {
         liveOk = false;
         logger.log("WARN", "[value] боевой ОТМЕНЁН: перевес испарился (свежий value " + (fv == null ? "исчез" : (fv * 100).toFixed(1) + "%") + " < порога " + (thr * 100).toFixed(1) + "%) → dry-run");
-      } else logger.log("INFO", "[value] свежий fair ок: value " + (fv * 100).toFixed(1) + "% ≥ порога → боевой разрешён");
+      } else {
+        logger.log("INFO", "[value] свежий fair ок: value " + (fv * 100).toFixed(1) + "% ≥ порога → боевой разрешён");
+        // СВЕЖИЙ fair → гейт «ОСТАТОЧНОГО value» на странице/в купоне (правило владельца): просадка кэфа
+        // НЕ ВАЖНА — ставим, пока value по РЕАЛЬНОЙ цене (кнопки/купона) ≥ порога панели.
+        const pb = pendingBet.get("betano");
+        if (pb) { pb.fair = m.fair; pb.minValue = thr; }
+      }
     } catch (e) { liveOk = false; logger.log("WARN", "[value] боевой отменён: не пересчитал свежий value (" + (e && e.message) + ") → dry-run"); }
   }
   // value-путь: макс НЕ читаем (фикс-стейк) + РАННИЙ ГЕЙТ кэфа (уехал на странице → купон не открываем, скип).
