@@ -15,7 +15,7 @@ const settingsStore = require("./lib/settings.cjs");
 const { defaultBookers, emptyProxy, buildProxyString, betanoTarget, localizeBetanoUrl, betanoCategoryFor, sameSideSelected, randomFingerprint, randomUA, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, verifyPick, verifySlipMarket, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 const fx = require("./lib/fx.cjs");
-const { parseMoney, vilkaStakes, slipOddsFromBtn, countSlipSelections } = require("./lib/vilka.cjs");
+const { parseMoney, vilkaStakes, slipOddsFromBtn, countSlipSelections, slipBetsFromText } = require("./lib/vilka.cjs");
 const { scanAll } = require("./lib/valuescanner.cjs"); // value-режим: мультиспорт-сканер (эталон ps3838 / oddspapi)
 const oddsapi = require("./lib/oddspapi.cjs"); // клиент oddspapi (для списка лиг в панели)
 const octo = require("./lib/octo.cjs"); // Octo Browser (антидетект по API) — простановка на Betano вместо Electron-окна
@@ -969,22 +969,16 @@ async function captureBetslip(win, cfg, accepted) {
   } catch (_) { /* ignore */ }
 }
 
-// READ-BACK v2: список ЖИВЫХ ставок купона Betano — строки «Bet <stake> <вал> Potential winnings <W> <вал>»
-// (разметка снята с боевых квитанций). Potential winnings у принятой ставки ФИКСИРОВАН → стабильный ключ.
-// Сравнение мультисетов ДО/ПОСЛЕ клика даёт ПОЗИТИВНОЕ доказательство приёма (появилась НОВАЯ строка с нашей
-// суммой) и РЕАЛЬНЫЙ принятый кэф (W/stake). Признак «поле суммы исчезло» (v1) давал ложные минусы: Betano
-// принимала, а бот писал «не поставлено» (доказано логами 2026-07-07: 3,74=2×1.87 и 6,90=2×3.45 висели с CASH OUT).
-// ВАЛЮТО-АГНОСТИК: символ валюты не фиксируем (€/$/…) — иначе на не-евро домене (lat.betano.com) НИ ОДНА строка
-// не сматчится и КАЖДАЯ ставка будет числиться «не принята». Якоря — англ. слова Bet / Potential winnings.
-const SLIP_BETS_JS = `(() => {
-  const out = [];
-  const re = /Bet\\s*[^\\d]{0,6}([\\d.,]+)[^\\d]*?Potential winnings\\s*[^\\d]{0,6}([\\d.,]+)/gi;
-  const t = (document.body && document.body.innerText) || "";
-  let m; while ((m = re.exec(t))) out.push(m[1] + "|" + m[2]);
-  return out;
-})()`;
+// READ-BACK v2: список ПРИНЯТЫХ ставок купона Betano — строки «Bet <stake> … Potential winnings <W>».
+// Potential winnings у принятой ставки ФИКСИРОВАН → стабильный ключ. Сравнение мультисетов ДО/ПОСЛЕ клика даёт
+// ПОЗИТИВНОЕ доказательство приёма (появилась НОВАЯ строка с нашей суммой) и РЕАЛЬНЫЙ принятый кэф (W/stake).
+// Браузер отдаёт СЫРОЙ innerText, разбор — в Node (slipBetsFromText, под тестами): регекс нельзя тихо сломать.
+// Баг 14.07 (lat): валюто-агностик-регекс со «\\s*[^\\d]{0,6}» пропускал «NOW $» → кнопка постановки
+// «BET NOW $1.500,00 Potential winnings $5.025,00» матчилась как ПРИНЯТАЯ ставка → ТГ «поставлено», а в
+// аккаунте пусто. Теперь между «Bet» и суммой БУКВЫ запрещены (см. SLIP_BET_RE в lib/vilka.cjs).
+const SLIP_BETS_JS = `((document.body && document.body.innerText) || "")`;
 async function readSlipBets(win) {
-  try { return (await win.webContents.executeJavaScript(SLIP_BETS_JS)) || []; } catch { return []; }
+  try { return slipBetsFromText(await win.webContents.executeJavaScript(SLIP_BETS_JS)); } catch { return []; }
 }
 // PURE-ish: строки after, которых не было в before (мультисет-разность — дубли учитываются по счёту).
 function newSlipBets(before, after) {

@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { vilkaStakes, parseMoney, countSlipSelections } = require("../lib/vilka.cjs");
+const { vilkaStakes, parseMoney, countSlipSelections, slipBetsFromText } = require("../lib/vilka.cjs");
 
 test("parseMoney: US и EU форматы, с валютой/мусором", () => {
   assert.strictEqual(parseMoney("Max bet USDT 10,035.00"), 10035);   // Pinnacle (US)
@@ -75,4 +75,25 @@ test("countSlipSelections: 1 выбор vs экспресс, любая валю
   assert.strictEqual(countSlipSelections("Real Betis to win 1.90 Bet 2,00 € Potential winnings 3,80 €"), 1);
   assert.strictEqual(countSlipSelections(""), 0);
   assert.strictEqual(countSlipSelections(null), 0);
+});
+
+// READ-BACK: строки ПРИНЯТЫХ ставок из купона. 🔴 Регресс 14.07 (lat): кнопка постановки с суммой ложно
+// проходила как принятая ставка → ТГ «поставлено», а в аккаунте пусто. Кнопку матчить НЕЛЬЗЯ.
+test("slipBetsFromText: принятая ставка проходит, кнопка BET NOW — НЕТ", () => {
+  // .bg — реальная принятая строка (евро, запятая)
+  assert.deepStrictEqual(slipBetsFromText("Bet 2,00 € Potential winnings 5,64 €"), ["2,00|5,64"]);
+  // 🔴 lat: КНОПКА постановки несёт сумму — НЕ должна считаться принятой ставкой (между Bet и суммой «NOW»)
+  assert.deepStrictEqual(slipBetsFromText("BET NOW $1.500,00 Potential winnings $5.025,00"), []);
+  // lat: РЕАЛЬНАЯ принятая строка (без «NOW») — проходит, реальный кэф 5.025/1.5=3.35
+  assert.deepStrictEqual(slipBetsFromText("Bet $1.500,00 Potential winnings $5.025,00"), ["1.500,00|5.025,00"]);
+  // тело с ОБОИМИ: принятая строка + кнопка → только принятая
+  assert.deepStrictEqual(
+    slipBetsFromText("… Bet $1.500,00 Potential winnings $5.025,00 … BET NOW $1.500,00 Potential winnings $5.025,00"),
+    ["1.500,00|5.025,00"]);
+  // две принятые ставки — обе (мультисет)
+  assert.deepStrictEqual(
+    slipBetsFromText("Bet 2,00 € Potential winnings 5,64 € Bet 3,00 € Potential winnings 6,90 €"),
+    ["2,00|5,64", "3,00|6,90"]);
+  assert.deepStrictEqual(slipBetsFromText(""), []);
+  assert.deepStrictEqual(slipBetsFromText(null), []);
 });
