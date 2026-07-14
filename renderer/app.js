@@ -336,6 +336,12 @@ async function renderBookers() {
           field("Пароль", b.login.pass || "", (v) => (b.login.pass = v)),
         ]),
       ]);
+      // Домен Betano (страна аккаунта): бот открывает логин И события на этом адресе. id событий общий во всех
+      // странах, поэтому смена домена = переезд аккаунта (напр. .bg → lat.betano.com) без правок кода.
+      const domainBox = el("div", { className: "subbox" }, [
+        el("div", { className: "muted", textContent: "Домен Betano (страна аккаунта): напр. https://www.betano.bg/ или https://lat.betano.com/ — сюда бот заходит на логин и события" }),
+        field("Адрес Betano", b.url || "", (v) => (b.url = v)),
+      ]);
       const stakeBox = el("input", { type: "text", placeholder: "сумма" }); stakeBox.style.maxWidth = "120px";
       const dryResult = el("div", { className: "muted", textContent: "открой событие (value-цикл или вручную в Octo) → впиши сумму → тест" });
       const dryRow = el("div", {}, [
@@ -355,7 +361,7 @@ async function renderBookers() {
       ]);
       const card = el("details", { className: "booker", open: true }, [
         el("summary", {}, [el("b", { textContent: (b.name || b.id) + " · Octo" })]),
-        enterOcto, octoBox, loginBox, dryRow,
+        enterOcto, octoBox, domainBox, loginBox, dryRow,
       ]);
       root.append(card);
       return; // карточку Betano собрали — общий (Electron) рендер пропускаем
