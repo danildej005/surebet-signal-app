@@ -15,7 +15,7 @@ const settingsStore = require("./lib/settings.cjs");
 const { defaultBookers, emptyProxy, buildProxyString, betanoTarget, localizeBetanoUrl, betanoCategoryFor, sameSideSelected, randomFingerprint, randomUA, buildFingerprintScript, bookerForUrl, resolveSurebetNav, pickOutcome, verifyPick, verifySlipMarket, isEventUrl, extractSubject, marketUnit } = require("./lib/bookers.cjs");
 const { startSocksBridge } = require("./lib/proxyBridge.cjs");
 const fx = require("./lib/fx.cjs");
-const { parseMoney, vilkaStakes, slipOddsFromBtn } = require("./lib/vilka.cjs");
+const { parseMoney, vilkaStakes, slipOddsFromBtn, countSlipSelections } = require("./lib/vilka.cjs");
 const { scanAll } = require("./lib/valuescanner.cjs"); // value-режим: мультиспорт-сканер (эталон ps3838 / oddspapi)
 const oddsapi = require("./lib/oddspapi.cjs"); // клиент oddspapi (для списка лиг в панели)
 const octo = require("./lib/octo.cjs"); // Octo Browser (антидетект по API) — простановка на Betano вместо Electron-окна
@@ -969,14 +969,16 @@ async function captureBetslip(win, cfg, accepted) {
   } catch (_) { /* ignore */ }
 }
 
-// READ-BACK v2: список ЖИВЫХ ставок купона Betano — строки «Bet <stake> € Potential winnings <W> €»
+// READ-BACK v2: список ЖИВЫХ ставок купона Betano — строки «Bet <stake> <вал> Potential winnings <W> <вал>»
 // (разметка снята с боевых квитанций). Potential winnings у принятой ставки ФИКСИРОВАН → стабильный ключ.
 // Сравнение мультисетов ДО/ПОСЛЕ клика даёт ПОЗИТИВНОЕ доказательство приёма (появилась НОВАЯ строка с нашей
 // суммой) и РЕАЛЬНЫЙ принятый кэф (W/stake). Признак «поле суммы исчезло» (v1) давал ложные минусы: Betano
 // принимала, а бот писал «не поставлено» (доказано логами 2026-07-07: 3,74=2×1.87 и 6,90=2×3.45 висели с CASH OUT).
+// ВАЛЮТО-АГНОСТИК: символ валюты не фиксируем (€/$/…) — иначе на не-евро домене (lat.betano.com) НИ ОДНА строка
+// не сматчится и КАЖДАЯ ставка будет числиться «не принята». Якоря — англ. слова Bet / Potential winnings.
 const SLIP_BETS_JS = `(() => {
   const out = [];
-  const re = /Bet\\s*([\\d.,]+)\\s*€\\s*Potential winnings\\s*([\\d.,]+)\\s*€/gi;
+  const re = /Bet\\s*[^\\d]{0,6}([\\d.,]+)[^\\d]*?Potential winnings\\s*[^\\d]{0,6}([\\d.,]+)/gi;
   const t = (document.body && document.body.innerText) || "";
   let m; while ((m = re.exec(t))) out.push(m[1] + "|" + m[2]);
   return out;
@@ -1049,9 +1051,11 @@ async function placeBet(id, stake, live = false, opts = {}) {
   if (slipTooHigh) logger.log("WARN", "  [value] цена купона ПОДОЗРИТЕЛЬНО выше выбора: " + slipOdds + " vs " + upRef + " — возможен экспресс/чужой рынок, блок");
   else if (slipOdds && bet0.fair && bet0.minValue != null && slipOddsOk === false)
     logger.log("WARN", "  [value] пропуск: остаточный value купона " + ((slipOdds * bet0.fair - 1) * 100).toFixed(1) + "% < порога " + (bet0.minValue * 100).toFixed(1) + "%");
-  // СЧЁТ ВЫБОРОВ в купоне: кэфы пишутся с ДВУМЯ знаками (2.10), линии — с одним (22.5) → число «X.YZ» в
-  // тексте купона до «€» = число выборов. Больше одного → НЕ кликаем и чистим (защита от экспресса).
-  const slipSelCount = ((String(r.slipText || "").split("€")[0] || "").match(/\b\d+\.\d\d\b/g) || []).length;
+  // СЧЁТ ВЫБОРОВ в купоне: кэфы пишутся с ДВУМЯ знаками через ТОЧКУ (2.10), линии — с одним (22.5) → число
+  // «X.YZ» = выбор. Больше одного → НЕ кликаем и чистим (защита от экспресса).
+  // ВАЛЮТО-АГНОСТИК (см. countSlipSelections): режет денежную сводку/кнопку и валютные символы, считает кэфы —
+  // на lat.betano.com сумма «2.00»/«2.000» не примется за лишний выбор.
+  const slipSelCount = countSlipSelections(r.slipText);
   if (slipSelCount >= 2) {
     r.error = "в купоне НЕ ОДИН выбор (" + slipSelCount + ") — не кликаю, чищу купон";
     logger.log("ERROR", "🔴 [value] " + r.error + " | slipText=" + JSON.stringify(String(r.slipText).slice(0, 160)));

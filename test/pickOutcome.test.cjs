@@ -366,12 +366,14 @@ test("pickOutcome: «1 1-2» с НИЧЬЕЙ на странице (3-исход
   assert.strictEqual(r, null);
 });
 
-// ── Betano: авто-рерайт страны (RO-фид → BG-аккаунт), ID события общий ─────────
-test("betanoTarget: betano.bg → BG-сайт, прочие → null", () => {
-  const t = betanoTarget("https://www.betano.bg/");
-  assert.deepStrictEqual(t, { host: "www.betano.bg", path: "en/match-odds" });
-  assert.strictEqual(betanoTarget("https://www.betano.pt/"), null);   // PT — без рерайта
-  assert.strictEqual(betanoTarget("https://ro.betano.com/"), null);   // RO-источник — без рерайта
+// ── Betano: авто-рерайт страны (RO-фид → страновой аккаунт), ID события общий ─────────
+test("betanoTarget: любой betano.* → тот же хост (bg/lat/pt), не-betano → null", () => {
+  // Универсальный: рерайт на ДОМЕН АККАУНТА из настроек (id событий общий во всех странах Betano).
+  assert.deepStrictEqual(betanoTarget("https://www.betano.bg/"), { host: "www.betano.bg", path: "en/match-odds" });
+  assert.deepStrictEqual(betanoTarget("https://lat.betano.com/"), { host: "lat.betano.com", path: "en/match-odds" }); // Latam
+  assert.deepStrictEqual(betanoTarget("https://www.betano.pt/"), { host: "www.betano.pt", path: "en/match-odds" });
+  assert.strictEqual(betanoTarget("https://example.com/"), null);    // не betano
+  assert.strictEqual(betanoTarget("https://notbetano.com/"), null);  // граница метки: notbetano ≠ betano
   assert.strictEqual(betanoTarget(""), null);
 });
 
