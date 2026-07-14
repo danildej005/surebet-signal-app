@@ -36,6 +36,7 @@ function renderStatus(s) {
     if ($("valuePlaceMarketExtra")) $("valuePlaceMarketExtra").value = v.valuePlaceMarketExtra != null ? v.valuePlaceMarketExtra : 0;
     $("valueLive").checked = !!v.valueLive;
     if ($("valuePlace")) $("valuePlace").checked = !!v.valuePlace;
+    if ($("valueRandomTest")) $("valueRandomTest").checked = !!v.valueRandomTest;
     if ($("valuePlaceRequireArb")) $("valuePlaceRequireArb").checked = !!v.valuePlaceRequireArb;
     if ($("valuePlaceMlOnly")) $("valuePlaceMlOnly").checked = Array.isArray(v.valuePlaceKinds) && v.valuePlaceKinds.length === 1 && v.valuePlaceKinds[0] === "ML";
     $("bettingcoKey").value = v.bettingcoKey || "";   // ключ Betano-фида (bettingco), показываем целиком (его машина)
@@ -178,6 +179,7 @@ function saveValue() {
     valueOddsMax: Number($("valueOddsMax").value) || 0,
     valueLive: $("valueLive").checked,
     valuePlace: $("valuePlace") ? $("valuePlace").checked : false,
+    valueRandomTest: $("valueRandomTest") ? $("valueRandomTest").checked : false,
     valuePlaceRequireArb: $("valuePlaceRequireArb") ? $("valuePlaceRequireArb").checked : false,
     octoBlockResources: $("octoBlockResources") ? $("octoBlockResources").checked : true, // блок live-видео (экономия прокси; применяется при след. подключении Octo)
     valueMarginBySport: (() => { const m = {}; for (const t of MARGIN_SPORTS) { const el = $("margin_" + t); const n = el ? Number(el.value) : 0; if (n > 0) m[t] = n / 100; } return m; })(), // % → доля; пусто = без фильтра
@@ -195,6 +197,7 @@ if ($("valueSave")) $("valueSave").onclick = async () => {
 // тумблеры value — это КОНФИГ: сохраняем сразу, но движок НЕ трогаем (сессия — отдельной кнопкой ниже).
 if ($("valueLive")) $("valueLive").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valueLive").checked ? "⚡ боевой ВКЛ (применится к идущей сессии)" : "dry-run"; }).catch(() => {});
 if ($("valuePlace")) $("valuePlace").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valuePlace").checked ? "🅱️ простановка ВКЛ" : "простановка выкл"; }).catch(() => {});
+if ($("valueRandomTest")) $("valueRandomTest").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valueRandomTest").checked ? "🎲 РАНДОМ-ТЕСТ ВКЛ — ставим случайное (эксперимент)" : "рандом-тест выкл"; }).catch(() => {});
 if ($("valuePlaceRequireArb")) $("valuePlaceRequireArb").onchange = () => saveValue().catch(() => {});
 if ($("valuePlaceMlOnly")) $("valuePlaceMlOnly").onchange = () => saveValue().catch(() => {});
 if ($("octoBlockResources")) $("octoBlockResources").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("octoBlockResources").checked ? "видео-блок ВКЛ (применится при след. подключении Octo)" : "видео-блок ВЫКЛ (перезапусти Octo-окно)"; }).catch(() => {});

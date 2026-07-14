@@ -85,6 +85,7 @@
     <label>Дубли (тот же исход)<input id="valuePlaceDupExtra" type="number" min="0" step="1" placeholder="0" /></label>
     <label class="liverow"><input type="checkbox" id="valueLive" /> <b>⚡ Боевой</b> — реальные ставки (выкл = dry-run)</label>
     <label class="liverow"><input type="checkbox" id="valuePlace" /> <b>🅱️ Простановка</b> — ставить сигналы на Betano через Octo (нужен octoMode; выкл = только детект)</label>
+    <label class="liverow" style="padding-left:22px;"><input type="checkbox" id="valueRandomTest" /> 🎲 <b>РАНДОМ-ТЕСТ</b> — ставить СЛУЧАЙНЫЕ исходы без фильтра value/вилки (диагностика порезки: «режут за содержимое или за бота»). Ценность считается для лога. Тратит деньги — минусовой режим!</label>
     <label class="liverow" style="padding-left:22px;"><input type="checkbox" id="valuePlaceRequireArb" /> только дошедшие до <b>вилки</b> (arb&gt;0)</label>
     <label class="liverow" style="padding-left:22px;"><input type="checkbox" id="valuePlaceMlOnly" /> только <b>победа (ML)</b> — самый надёжный выбор для старта</label>
     <div class="muted" style="margin-top:6px;">Тумблеры и поля выше — это КОНФИГ: сохраняются, но сессию НЕ запускают. Настрой всё → «Сохранить конфиг» → «Запустить сессию».</div>

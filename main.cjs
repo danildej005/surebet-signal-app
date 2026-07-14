@@ -773,7 +773,7 @@ async function selectLegOutcome(id, opts = {}) {
     // НЕ ВАЖНА — важен ОСТАТОЧНЫЙ value по РЕАЛЬНОЙ цене: цена×свежий_fair−1 ≥ порога панели → ставим.
     // (раньше жёсткий допуск 1.5% выбрасывал половину годных: сигнал +7% при просадке 3% всё ещё несёт +4%).
     // Свежего fair нет (вилочный путь) → старый допуск по кэфу.
-    if (opts.earlyOddsGate) {
+    if (opts.earlyOddsGate && !bet.randomTest) { // РАНДОМ-ТЕСТ: цену не гейтим (ставим любое содержимое)
       const eo = Number(bet.expectedOdds) || 0, co = Number(selectedOdds) || 0;
       if (bet.fair && bet.minValue != null && co) {
         const residual = co * bet.fair - 1;
@@ -803,8 +803,9 @@ async function selectLegOutcome(id, opts = {}) {
   // Макс НЕ читаем при skipMax (value: фикс-стейк, лимит не нужен + клик MAX пачкал поле «непонятной суммой»).
   const maxStake = (cfg.outcomeSel && !opts.skipMax) ? await readBookmakerMax(win, id) : null;
   const exp = bet.expectedOdds;
-  // oddsOk: при свежем fair — по ОСТАТОЧНОМУ value (правило владельца), иначе по допуску кэфа (вилочный путь)
-  const oddsOk = (bet.fair && bet.minValue != null && selectedOdds) ? (selectedOdds * bet.fair - 1 >= bet.minValue)
+  // oddsOk: РАНДОМ-ТЕСТ → всегда true (цену не гейтим); при свежем fair — по ОСТАТОЧНОМУ value; иначе допуск кэфа
+  const oddsOk = bet.randomTest ? true
+    : (bet.fair && bet.minValue != null && selectedOdds) ? (selectedOdds * bet.fair - 1 >= bet.minValue)
     : (exp && selectedOdds) ? (selectedOdds >= exp * (1 - ODDS_TOLERANCE)) : null;
   let curUrl = ""; try { curUrl = win.webContents.getURL(); } catch { /* ignore */ }
   return { ok: true, win, cfg, bet, selected, selectedOdds, how, maxStake, expectedOdds: exp || null, oddsOk, selectedIndex: pickedIndex, eventUrl: curUrl };
@@ -1040,7 +1041,8 @@ async function placeBet(id, stake, live = false, opts = {}) {
   const upRef = Number(r.selectedOdds) || expOdds;
   const slipTooHigh = !!(slipOdds && upRef && slipOdds > upRef * 1.25);
   const slipOddsOk = (slipOdds == null) ? null
-    : slipTooHigh ? false
+    : slipTooHigh ? false                                        // анти-экспресс — работает ВСЕГДА (в т.ч. рандом-тест)
+    : bet0.randomTest ? true                                     // РАНДОМ-ТЕСТ: дрейф цены не блокируем
     : (bet0.fair && bet0.minValue != null) ? (slipOdds * bet0.fair - 1 >= bet0.minValue)
     : (expOdds ? (slipOdds >= expOdds * (1 - ODDS_TOLERANCE)) : null);
   r.slipOddsOk = slipOddsOk;
@@ -1565,7 +1567,8 @@ async function startValueEngine() {
     const c = eng.counts();
     logger.log("INFO", "[value] движок bettingco поднят: Betano игр " + c.games + " | Pinnacle игр " + c.pinGames);
     // Конфиг запуска в лог — чтобы сразу видеть, что реально включено (частый ловец: valuePlace off / octoMode off / стейк=0).
-    logger.log("INFO", "[value] КОНФИГ: простановка=" + (settings.valuePlace ? "ВКЛ" : "выкл") + " · octoMode=" + (settings.octoMode ? "ВКЛ" : "выкл") +
+    if (settings.valueRandomTest) logger.log("INFO", "[value] ⚠️ РЕЖИМ ЭКСПЕРИМЕНТА: valueRandomTest ВКЛ — ставим СЛУЧАЙНЫЕ исходы без фильтра value/вилки (носитель как в боевом). Диагностика порезки аккаунта.");
+    logger.log("INFO", "[value] КОНФИГ: простановка=" + (settings.valuePlace ? "ВКЛ" : "выкл") + (settings.valueRandomTest ? " · 🎲РАНДОМ-ТЕСТ" : "") + " · octoMode=" + (settings.octoMode ? "ВКЛ" : "выкл") +
       " · режим=" + (settings.valueLive ? "БОЕВОЙ" : "dry-run") + " · стейк=" + (Number(settings.valueStake) || 0) +
       " · порог=" + ((Number(settings.valueThreshold) || 0) * 100).toFixed(1) + "%" +
       " · рынки=" + ((settings.valuePlaceKinds && settings.valuePlaceKinds.length) ? settings.valuePlaceKinds.join(",") : "все") +
@@ -1648,7 +1651,10 @@ async function valueEngineTick() {
       sessDetected: n, sessPlaced: placed, sessAvg: n ? vSum / n : 0, sessLife: n ? lifeSum / n : 0,
       lastBet: top ? (top.sport + " · " + top.t1 + " vs " + top.t2 + " · " + top.market + " " + top.side + " +" + (top.value * 100).toFixed(1) + "%") : "" });
     // Ставочная часть на этих же сигналах (флаг valuePlace, по умолчанию ВЫКЛ; реальный клик только при valueLive).
-    if (settings.valuePlace && settings.octoMode) tryPlaceFromValueSignals(sigs).catch((e) => logger.log("ERROR", "[value] простановка:", e && e.message));
+    if (settings.valuePlace && settings.octoMode) {
+      if (settings.valueRandomTest) tryPlaceRandomTest().catch((e) => logger.log("ERROR", "[РАНДОМ-ТЕСТ]:", e && e.message));
+      else tryPlaceFromValueSignals(sigs).catch((e) => logger.log("ERROR", "[value] простановка:", e && e.message));
+    }
     else if (settings.valuePlace && !settings.octoMode && Date.now() - valuePlaceDiagAt > 20000) {
       // Частый ловец: простановку включили, но НЕ подключились к Octo через приложение (логин снаружи не считается).
       valuePlaceDiagAt = Date.now();
@@ -1656,6 +1662,58 @@ async function valueEngineTick() {
     }
   } catch (e) { logger.log("ERROR", "[value] цикл движка:", e && e.message); sendValuePulse({ error: e && e.message }); }
   finally { valueEngineBusy = false; }
+}
+
+// ЭКСПЕРИМЕНТ (valueRandomTest): ставим СЛУЧАЙНЫЕ исходы, а не value. Метод различия Милля — меняем ТОЛЬКО
+// содержимое ставок (value→рандом), носитель (бот/клики/анонимка/спорт/стейк/тайминг) держим как в боевом.
+// Блокируют так же быстро → дело в носителе (value/CLV ни при чём). Выживает → дело в содержимом.
+// Ценность/вилку СЧИТАЕМ и логируем для сверки, но НЕ фильтруем по ним. Пейсинг: ≤ valueMaxPerDay/сут, разброс.
+let randNextAt = 0, randBurstLeft = 0;
+async function tryPlaceRandomTest() {
+  if (valuePlaceBusy || botBusy || valueBusy || !valueEngine) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if (valuePlaceDay !== today) { valuePlaceDay = today; valuePlaceCount = 0; }
+  const maxPerDay = Number(settings.valueMaxPerDay) || 30;
+  if (maxPerDay && valuePlaceCount >= maxPerDay) return;         // суточный лимит (30 у нас)
+  const now = Date.now();
+  if (now < randNextAt) return;                                  // пейсинг: СЕРИЯМИ (внутри серии коротко, между сериями долго)
+  // ПОЛНАЯ вселенная исходов: threshold −1 (обе стороны, любой value), потолок/маржу не режем.
+  const uni = valueEngine.scan({ threshold: -1, maxPlausible: 9, marginMax: 0, marginBySport: {} });
+  const allow = Array.isArray(settings.valueLiveSports) ? settings.valueLiveSports.map(Number) : [];
+  const oMin = Number(settings.valueOddsMin) || 1.3, oMax = Number(settings.valueOddsMax) || 6; // рамка кэфов = поля панели «Кэф от/до» (footprint как у value-арма)
+  const cand = uni.filter((s) => s.betanoSelId && s.link && s.betanoOdds >= oMin && s.betanoOdds <= oMax
+    && (!allow.length || allow.includes(Number(s.sportType)))
+    && !valuePlaced.includes(s.t1 + "~" + s.t2 + "|" + s.market + "|" + s.side));
+  if (!cand.length) return;
+  const s = cand[Math.floor(Math.random() * cand.length)];      // ← СЛУЧАЙНЫЙ выбор, НЕ по value
+  const c = valueplace.signalToCandidate(s, Number(settings.valueStake) || 0);
+  if (!c.stake) { logger.log("WARN", "[РАНДОМ-ТЕСТ] valueStake=0 — задай сумму ставки"); return; }
+  c.randomTest = true;                                           // флаг: в гейтах пропускаем value-проверки (не судью/квитанцию)
+  const booker = findBooker("betano");
+  const target = betanoTarget(booker && booker.url);
+  if (target) c.url = localizeBetanoUrl(c.url, target);
+  valuePlaceBusy = true;
+  // СЕРИЯМИ: 5–6 ставок подряд (внутри серии 5–45с), затем длинная пауза 3–5.5ч между сериями (≈как коллега;
+  // укладывает ≤30/сут: ~5–6 серий по 5–6). valueMaxPerDay — жёсткий потолок сверху.
+  if (randBurstLeft <= 0) randBurstLeft = 5 + Math.floor(Math.random() * 2);
+  randBurstLeft--;
+  randNextAt = randBurstLeft > 0 ? now + 5000 + Math.random() * 40000 : now + 3 * 3600000 + Math.random() * 2.5 * 3600000;
+  const live = !!settings.valueLive;
+  logger.log("INFO", "[РАНДОМ-ТЕСТ] " + (live ? "СТАВЛЮ" : "DRY-RUN") + " (без фильтров, в серии осталось " + randBurstLeft + ") " + c.t1 + " vs " + c.t2 + " | " + c.market + " " + c.side + " | " + c.desc + " @" + c.expectedOdds +
+    " · РАСЧЁТ: value " + (s.value * 100).toFixed(1) + "% | вилка " + (s.arbPct >= 0 ? "+" : "") + (s.arbPct * 100).toFixed(1) + "% | маржа " + (s.margin * 100).toFixed(1) + "%");
+  try {
+    const res = await runValueCycle(c, live);
+    valuePlaced.push(c.key);
+    if (res && res.placed) {
+      valuePlaceCount++; markValuePlaced(c.key);
+      logger.log("INFO", "[РАНДОМ-ТЕСТ] ✅ ПОСТАВЛЕНО @" + (res.realOdds || res.selectedOdds || c.expectedOdds) + " (был расчётный value " + (s.value * 100).toFixed(1) + "%) | сегодня " + valuePlaceCount + "/" + maxPerDay);
+      if (settings.tgToken && settings.tgChat)
+        tg("🎲 <b>РАНДОМ-ТЕСТ: поставлено</b>\n" + escHtml((c.t1 || "?") + " vs " + (c.t2 || "?")) + "\n" + escHtml(c.desc + " @" + (res.realOdds || res.selectedOdds)) + " · расч. value " + (s.value * 100).toFixed(1) + "%").catch(() => {});
+    } else logger.log("INFO", "[РАНДОМ-ТЕСТ] не поставлено: " + ((res && res.error) || "исход не выбран"));
+    if (live && res && !res.placed && Array.isArray(res.lateTargets) && res.lateTargets.length)
+      valueLatePending.push({ key: c.key, desc: c.desc, t1: c.t1, t2: c.t2, value: c.value, selected: res.selected, stake: Number(c.stake) || 0, targets: res.lateTargets, before: res.slipBefore || [], ts: Date.now(), eventId: (String(res.eventUrl || c.url || "").match(/\/(\d{6,})\/?/) || [])[1] || "" });
+  } catch (e) { logger.log("ERROR", "[РАНДОМ-ТЕСТ] " + (e && e.message)); }
+  finally { valuePlaceBusy = false; }
 }
 
 // Одна попытка простановки из value-сигналов (флаг valuePlace). Переиспуёт runValueCycle (Octo/Betano-выбор).
@@ -1839,6 +1897,7 @@ async function runValueCycle(c, live) {
   // Поля сигнала (kind/side/param/st/t1/t2) — для НЕЗАВИСИМОГО судьи verifyPick перед боевым кликом.
   pendingBet.set("betano", { outcomeId: c.outcomeId, expectedOdds: c.expectedOdds, desc: c.desc, descFull: c.descFull || c.subject || c.desc, subject: c.subject,
     kind: c.kind, side: c.side, param: c.param, st: c.st, sportType: c.sportType, t1: c.t1, t2: c.t2, betanoSelId: c.betanoSelId || "",
+    randomTest: !!c.randomTest, // эксперимент: гейты value пропускаются
     fair: c.freshFair || null, minValue: c.minValue != null ? c.minValue : null }); // свежий fair + порог панели → гейт ОСТАТОЧНОГО value
   // Octo-режим: антидетект/прокси/логин — внутри Octo-профиля, открываем betano.bg в Octo-странице.
   // Иначе — наш Electron-антидетект (запасной путь). Адаптер кладётся в octoWins → placeBet берёт его через bookerWin.
@@ -1867,7 +1926,11 @@ async function runValueCycle(c, live) {
       logger.log("INFO", "[value] боевой пропущен: спорт sportType=" + c.sportType + " не в списке боевых " + JSON.stringify(allow) + " → dry-run");
     }
   }
-  if (liveOk) {
+  if (liveOk && c.randomTest) {
+    // РАНДОМ-ТЕСТ: value-гейты (свежий fair, остаточный value) НЕ применяем — ставим случайное содержимое.
+    // Судья verifyPick/по-купону, selnid-клик, квитанция, стейк, спорт — работают как обычно (носитель константен).
+    logger.log("INFO", "[РАНДОМ-ТЕСТ] value-гейты пропущены (эксперимент), судья и квитанция активны");
+  } else if (liveOk) {
     // (B) #4b СВЕЖИЙ FAIR: перевес ЕЩЁ есть? Пересчёт по последнему опросу движка (обе БК ~1.5с в фоне) — за ~7–15с
     // открытия события Pinnacle мог уехать, а oddsOk смотрит только Betano. Не подтвердилось → НЕ ставим живьём.
     try {
@@ -2458,6 +2521,7 @@ ipcMain.handle("save-settings", (_e, patch) => {
   if (typeof patch.valueMode === "boolean") clean.valueMode = patch.valueMode;
   if (typeof patch.valueLive === "boolean") clean.valueLive = patch.valueLive;
   if (typeof patch.valuePlace === "boolean") clean.valuePlace = patch.valuePlace;
+  if (typeof patch.valueRandomTest === "boolean") clean.valueRandomTest = patch.valueRandomTest; // эксперимент: рандом-ставки
   if (typeof patch.valuePlaceRequireArb === "boolean") clean.valuePlaceRequireArb = patch.valuePlaceRequireArb;
   if (Array.isArray(patch.valuePlaceKinds)) clean.valuePlaceKinds = patch.valuePlaceKinds.map(String);
   if (patch.valuePlaceDupExtra !== undefined) clean.valuePlaceDupExtra = Math.max(0, Number(patch.valuePlaceDupExtra) || 0);
