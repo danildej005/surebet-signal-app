@@ -21,6 +21,11 @@ const oddsapi = require("./lib/oddspapi.cjs"); // клиент oddspapi (для 
 const octo = require("./lib/octo.cjs"); // Octo Browser (антидетект по API) — простановка на Betano вместо Electron-окна
 const { ValueLiveEngine } = require("./lib/valuelive.cjs"); // движок LIVE-value на фиде bettingco (Betano+Pinnacle синхронно)
 const valueplace = require("./lib/valueplace.cjs"); // ставочная часть: выбор ЧТО ставить + синтез Betano-desc (флаг valuePlace)
+// ПРЕМАТЧ (одно плечо вилки): отдельный движок на отдельном ключе фида. Правила — docs/PREMATCH-HANDBOOK.md, план — PLAN.md
+const { PrematchEngine } = require("./lib/prematch/engine.cjs");
+const prematchFeed = require("./lib/prematch/feed.cjs");
+const prematchSr = require("./lib/prematch/sportradar.cjs");
+const prematchPlace = require("./lib/prematch/place.cjs");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -775,7 +780,15 @@ async function selectLegOutcome(id, opts = {}) {
     // Свежего fair нет (вилочный путь) → старый допуск по кэфу.
     if (opts.earlyOddsGate && !bet.randomTest) { // РАНДОМ-ТЕСТ: цену не гейтим (ставим любое содержимое)
       const eo = Number(bet.expectedOdds) || 0, co = Number(selectedOdds) || 0;
-      if (bet.fair && bet.minValue != null && co) {
+      if (bet.arbOpp && co) {
+        // ПРЕМАТЧ: вилка должна оставаться при цене, которую показывает КНОПКА Betano (а не при цене из фида).
+        const ra = prematchPlace.arbAtPrice(co, bet.arbOpp), need = Number(bet.arbMin) || 0;
+        const txt = "вилка по цене страницы " + (ra * 100).toFixed(2) + "% (кнопка " + co + ", в фиде " + eo + ", порог " + (need * 100).toFixed(2) + "%)";
+        if (ra < need) {
+          if (!bet.softGate) return { ok: false, win, cfg, bet, selected, selectedOdds, how, oddsOk: false, error: txt + " — меньше порога, купон не открывали" };
+          logger.log("INFO", "  [прематч] " + txt + " — меньше порога; dry-run: открываю купон ради ярлыка рынка");
+        } else logger.log("INFO", "  [прематч] " + txt + " — идём в купон");
+      } else if (bet.fair && bet.minValue != null && co) {
         const residual = co * bet.fair - 1;
         if (residual < bet.minValue) return { ok: false, win, cfg, bet, selected, selectedOdds, how, oddsOk: false, error: "остаточный value " + (residual * 100).toFixed(1) + "% < порога " + (bet.minValue * 100).toFixed(1) + "% (кэф " + co + ", купон не открывали)" };
         logger.log("INFO", "  [остаточный value] кнопка " + co + " × fair → +" + (residual * 100).toFixed(1) + "% ≥ порога — идём в купон");
@@ -805,6 +818,7 @@ async function selectLegOutcome(id, opts = {}) {
   const exp = bet.expectedOdds;
   // oddsOk: РАНДОМ-ТЕСТ → всегда true (цену не гейтим); при свежем fair — по ОСТАТОЧНОМУ value; иначе допуск кэфа
   const oddsOk = bet.randomTest ? true
+    : (bet.arbOpp && selectedOdds) ? (prematchPlace.arbAtPrice(selectedOdds, bet.arbOpp) >= (Number(bet.arbMin) || 0)) // прематч: вилка при цене кнопки
     : (bet.fair && bet.minValue != null && selectedOdds) ? (selectedOdds * bet.fair - 1 >= bet.minValue)
     : (exp && selectedOdds) ? (selectedOdds >= exp * (1 - ODDS_TOLERANCE)) : null;
   let curUrl = ""; try { curUrl = win.webContents.getURL(); } catch { /* ignore */ }
@@ -1039,6 +1053,7 @@ async function placeBet(id, stake, live = false, opts = {}) {
   const slipOddsOk = (slipOdds == null) ? null
     : slipTooHigh ? false                                        // анти-экспресс — работает ВСЕГДА (в т.ч. рандом-тест)
     : bet0.randomTest ? true                                     // РАНДОМ-ТЕСТ: дрейф цены не блокируем
+    : bet0.arbOpp ? (prematchPlace.arbAtPrice(slipOdds, bet0.arbOpp) >= (Number(bet0.arbMin) || 0)) // прематч: вилка при цене купона
     : (bet0.fair && bet0.minValue != null) ? (slipOdds * bet0.fair - 1 >= bet0.minValue)
     : (expOdds ? (slipOdds >= expOdds * (1 - ODDS_TOLERANCE)) : null);
   r.slipOddsOk = slipOddsOk;
@@ -1593,6 +1608,140 @@ function stopValueEngine() {
   valueEngine = null; sessionSignals.clear(); sessionEvents.clear(); valueEngineNextTry = 0; // сброс backoff: ручной старт — сразу
 }
 
+// ── ПРЕМАТЧ: одно плечо вилки на Betano (движок lib/prematch; правила — docs/PREMATCH-HANDBOOK.md, план — PLAN.md) ──
+// Отдельный движок на ОТДЕЛЬНОМ ключе фида (прематч и лайв различаются ключом). Запускается той же кнопкой сессии,
+// когда включён тумблер prematchMode, — ВМЕСТО лайв-движка. Лайв-путь при этом не затрагивается.
+// ПРОСТАНОВКА ПРЕМАТЧА — ТОЛЬКО DRY-RUN: runValueCycle всегда вызывается с live=false, кнопку ставки бот в этом режиме
+// не нажимает ни при каких настройках (тумблер «Боевой» на прематч не действует). Цель тестового запуска — сверить
+// цену фида с ценой кнопки и собрать ярлыки купона по рынкам, которых судьи ещё не знают.
+let prematchEngine = null, prematchStarting = false, prematchNextTry = 0, prematchPlaceBusy = false, prematchDiagAt = 0, prematchNoStakeAt = 0;
+const prematchTried = new Set(), prematchPerPair = new Map();
+const PREMATCH_PAUSE_MS = 5000; // пауза между запросами к фиду: конторы опрашиваются по очереди, каждая раз в ~10 с
+const prematchPct = (v) => (v == null ? "—" : (v * 100).toFixed(2) + "%");
+const prematchSport = (t) => require("./lib/bettingco.cjs").sportName(Number(t));
+function prematchAppend(file, obj) {
+  try {
+    const fsx = require("node:fs"), dir = join((logger.dir && logger.dir()) || app.getPath("userData"), "prematch");
+    fsx.mkdirSync(dir, { recursive: true });
+    fsx.appendFileSync(join(dir, file), JSON.stringify(obj) + "\n");
+  } catch { /* журнал — не критично */ }
+}
+
+async function startPrematchEngine() {
+  if (!valueRun || !settings.prematchMode || !settings.prematchKey) { stopPrematchEngine(); return; }
+  if (prematchEngine || prematchStarting) return;
+  prematchStarting = true;
+  try {
+    const day = () => new Date().toISOString().slice(0, 10);
+    const sports = Array.isArray(settings.prematchSports) && settings.prematchSports.length ? settings.prematchSports.map(Number) : undefined;
+    const eng = new PrematchEngine({
+      feed: prematchFeed.makeFeed(settings.prematchKey), directory: prematchSr.makeDirectory(), sports,
+      gridMs: Math.max(10, Number(settings.prematchGridSec) || 120) * 1000,
+      onLog: (lvl, msg) => logger.log(lvl === "WARN" ? "WARN" : "INFO", "[прематч] " + msg),
+      onArb: (r, kind) => {
+        if (kind === "new") logger.log("INFO", "[прематч] 🎯 ВИЛКА " + prematchPct(r.arb) + " | " + prematchSport(r.sportType) + " | " + r.t1 + " — " + r.t2 + " | " + r.what +
+          " | Betano " + r.price + " / Pinnacle " + Number(r.opp).toFixed(3) + " (" + r.via + ") | до старта " + (r.minsToStart / 60).toFixed(1) + " ч" + (r.pairCheck === "suspect" ? " | ⚠ цены расходятся и по силе, и по тоталу" : ""));
+        else if (kind === "identity") logger.log(r.identity === "mismatch" ? "WARN" : "INFO", "[прематч] проверка матча: " + r.identity + " | " + r.t1 + " — " + r.t2 + " | " + r.identityWhy);
+        else if (kind === "close") logger.log("INFO", "[прематч] закрытие: " + r.t1 + " — " + r.t2 + " | " + r.what + " | цена " + r.price + " → " + (r.kC == null ? "нет" : r.kC) + " (" + prematchPct(r.drop) + ")");
+        prematchAppend("arbs-" + day() + ".jsonl", { kind, at: Date.now(), ...r });
+      },
+    });
+    prematchEngine = eng; prematchTried.clear(); prematchPerPair.clear();
+    logger.log("INFO", "[прематч] КОНФИГ: режим=DRY-RUN (кнопка ставки не нажимается) · простановка=" + (settings.valuePlace ? "ВКЛ" : "выкл") + " · octoMode=" + (settings.octoMode ? "ВКЛ" : "выкл") +
+      " · мин. вилка=" + prematchPct(Number(settings.prematchMinArb) || 0) + " · стейк=" + (Number(settings.valueStake) || 0) +
+      " · сетка=" + Math.round(eng.gridMs / 1000) + "с · спорт=" + (sports ? sports.join(",") : "набор по умолчанию") + " · проверка матча по номеру Sportradar=ВКЛ" +
+      (settings.valueLive ? " · ВНИМАНИЕ: тумблер «Боевой» включён, но на прематч он не действует" : ""));
+    sendValuePulse({ on: true, live: false, scanning: true, error: "", note: "прематч: загрузка фида (может занять несколько минут)…" });
+    prematchLoop(eng).catch((e) => logger.log("ERROR", "[прематч] цикл:", e && e.message));
+  } catch (e) {
+    prematchNextTry = Date.now() + 45000;
+    logger.log("WARN", "[прематч] движок не поднялся (" + (e && e.message) + ") — повтор через 45с");
+    sendValuePulse({ scanning: false, error: "прематч: " + (e && e.message) });
+  } finally { prematchStarting = false; }
+}
+
+function stopPrematchEngine() {
+  if (prematchEngine) logger.log("INFO", "[прематч] остановлен: " + JSON.stringify(prematchEngine.summary()));
+  prematchEngine = null; prematchNextTry = 0; // цикл prematchLoop сам выйдет: он привязан к экземпляру движка
+}
+
+// Цикл прематча: шаг движка (опрос одной конторы, оценка пар, сверка матчей) → попытка dry-run → пауза.
+async function prematchLoop(eng) {
+  while (prematchEngine === eng) {
+    try {
+      await eng.tick();
+      if (prematchEngine !== eng) break;
+      if (eng.ready()) {
+        const s = eng.summary(), top = eng.scan()[0] || null;
+        sendValuePulse({ on: true, live: false, scanning: false, error: "", candidates: s.arbsNow, top: top ? top.arb : null, placedToday: prematchTried.size, max: 0,
+          note: "ПРЕМАТЧ dry-run · пар " + s.pairs + " · вилок в журнале " + s.arbsJournal + (s.rate429 ? " · 429: " + s.rate429 : ""),
+          lastBet: top ? (prematchSport(top.sportType) + " · " + top.t1 + " — " + top.t2 + " · " + top.what + " +" + prematchPct(top.arb)) : "" });
+        if (settings.valuePlace && settings.octoMode) await tryPlacePrematch(eng);
+        else if (settings.valuePlace && !settings.octoMode && Date.now() - prematchDiagAt > 60000) {
+          prematchDiagAt = Date.now();
+          logger.log("WARN", "[прематч] простановка ВКЛ, но octoMode ВЫКЛ — нажми «Войти (Octo)» в карточке Betano");
+        }
+      }
+    } catch (e) {
+      if (e && e.code === "KEY_EXPIRED") {
+        logger.log("ERROR", "[прематч] ключ фида истёк (401) — сессия остановлена, нужен новый ключ");
+        sendValuePulse({ scanning: false, error: "прематч: ключ фида истёк" });
+        if (settings.tgToken && settings.tgChat) tg("🔴 <b>Прематч остановлен</b>: ключ фида истёк").catch(() => {});
+        valueRun = false; stopPrematchEngine(); pushStatus();
+        return;
+      }
+      logger.log("WARN", "[прематч] шаг: " + (e && e.message));
+    }
+    await sleep(PREMATCH_PAUSE_MS);
+  }
+}
+
+// Одна попытка dry-run по лучшей ещё не пробованной вилке: открыть событие, найти кнопку по id из фида, сверить цену
+// кнопки с ценой фида, открыть купон и снять ярлык рынка. Кнопку ставки НЕ нажимаем (live=false).
+async function tryPlacePrematch(eng) {
+  if (prematchPlaceBusy || botBusy || valueBusy || valuePlaceBusy) return;
+  const cfg = { minArb: Number(settings.prematchMinArb) || 0, oddsMin: Number(settings.valueOddsMin) || 0, oddsMax: Number(settings.valueOddsMax) || 0,
+    minToStartMin: eng.minToStartMin, maxPerPair: 2 };
+  // пока матч не сверен по номеру Sportradar — не трогаем его (сверка занимает секунды)
+  const arbs = eng.scan().filter((a) => a.identity != null);
+  const pick = prematchPlace.choosePrematch(arbs, cfg, { tried: prematchTried, perPair: prematchPerPair });
+  if (Date.now() - prematchDiagAt > 60000) {
+    prematchDiagAt = Date.now();
+    logger.log("INFO", "[прематч] попытки: вилок сейчас " + arbs.length + " | пробовано " + prematchTried.size + (pick.skip ? " | не берём: " + pick.skip : ""));
+  }
+  if (!pick.arb) return;
+  const a = pick.arb, stake = Number(settings.valueStake) || 0;
+  if (!stake) { if (Date.now() - prematchNoStakeAt > 300000) { prematchNoStakeAt = Date.now(); logger.log("WARN", "[прематч] сумма ставки не задана (поле «Ставка фикс») — dry-run не может заполнить купон, пропуск"); } return; }
+  const c = prematchPlace.arbToCandidate(a, stake, cfg.minArb);
+  c.softGate = true; // dry-run: дойти до купона, даже если цена на странице уже ушла
+  const booker = findBooker("betano");
+  const target = betanoTarget(booker && booker.url);           // ссылка фида (betano.cz) → домен аккаунта
+  if (target) c.url = localizeBetanoUrl(c.url, target);
+  prematchTried.add(a.pairId + "|" + a.key); prematchPerPair.set(a.pairId, (prematchPerPair.get(a.pairId) || 0) + 1);
+  prematchPlaceBusy = true;
+  logger.log("INFO", "[прематч] DRY-RUN " + prematchSport(a.sportType) + " | " + a.t1 + " — " + a.t2 + " | " + a.what + " | Betano " + a.price + " / Pinnacle " + Number(a.opp).toFixed(3) +
+    " | вилка " + prematchPct(a.arb) + " | матч: " + a.identity + (c.judged ? "" : " | рынок судьям не знаком — собираю ярлык купона"));
+  try {
+    const res = await runValueCycle(c, false);                 // false = dry-run, всегда
+    const pagePrice = res && res.selectedOdds ? Number(res.selectedOdds) : null;
+    const arbPage = pagePrice ? prematchPlace.arbAtPrice(pagePrice, a.opp) : null;
+    const verdict = !res || !res.selected ? "кнопка не найдена: " + ((res && res.error) || "исход не выбран")
+      : arbPage == null ? "цену кнопки не прочитал"
+      : arbPage >= cfg.minArb ? "✅ вилка подтверждена страницей " + prematchPct(arbPage)
+      : "цена на странице уже другая: вилка " + prematchPct(arbPage);
+    logger.log("INFO", "[прематч] итог dry-run: " + verdict + " | кнопка «" + ((res && res.selected) || "—") + "» @" + (pagePrice || "?") + " (в фиде " + a.price + ")" +
+      (res && res.slipText ? " | купон: " + JSON.stringify(String(res.slipText).slice(0, 140)) : "") +
+      (res && res.verifyReason ? " | судья: " + res.verifyReason : (res && res.verified ? " | судья: ок" : "")));
+    prematchAppend("dryrun-" + new Date().toISOString().slice(0, 10) + ".jsonl", {
+      at: Date.now(), sportType: a.sportType, t1: a.t1, t2: a.t2, league: a.league, key: a.key, what: a.what, kind: c.kind, judged: c.judged,
+      feedPrice: a.price, opp: a.opp, via: a.via, arbFeed: a.arb, pagePrice, arbPage, mins: a.mins, identity: a.identity, pairCheck: a.pairCheck,
+      selected: (res && res.selected) || null, how: (res && res.how) || null, slipText: (res && res.slipText) || null,
+      verified: res ? res.verified : null, verifyReason: (res && res.verifyReason) || null, error: (res && res.error) || null, url: c.url, selId: a.selId });
+    await sleep(3000);
+  } catch (e) { logger.log("ERROR", "[прематч] dry-run:", e && e.message); }
+  finally { prematchPlaceBusy = false; }
+}
+
 // Будущая простановка вызовет это, чтобы отметить валуй проставленным (сейчас не вызывается → placed=0).
 function markValuePlaced(key) { const e = sessionSignals.get(key); if (e) e.placed = (e.placed || 0) + 1; }
 
@@ -1896,6 +2045,9 @@ async function runValueCycle(c, live) {
   pendingBet.set("betano", { outcomeId: c.outcomeId, expectedOdds: c.expectedOdds, desc: c.desc, descFull: c.descFull || c.subject || c.desc, subject: c.subject,
     kind: c.kind, side: c.side, param: c.param, st: c.st, sportType: c.sportType, t1: c.t1, t2: c.t2, betanoSelId: c.betanoSelId || "",
     randomTest: !!c.randomTest, // эксперимент: гейты value пропускаются
+    // ПРЕМАТЧ: противоположная цена Pinnacle и порог вилки → гейт «вилка при цене страницы»; softGate — в dry-run
+    // не обрывать попытку на ушедшей цене, а дойти до купона и снять ярлык рынка.
+    arbOpp: c.arbOpp || null, arbMin: c.arbMin != null ? c.arbMin : null, softGate: !!c.softGate,
     fair: c.freshFair || null, minValue: c.minValue != null ? c.minValue : null }); // свежий fair + порог панели → гейт ОСТАТОЧНОГО value
   // Octo-режим: антидетект/прокси/логин — внутри Octo-профиля, открываем betano.bg в Octo-странице.
   // Иначе — наш Electron-антидетект (запасной путь). Адаптер кладётся в octoWins → placeBet берёт его через bookerWin.
@@ -2290,8 +2442,16 @@ async function watchdog(text) {
 async function tick() {
   // ── LIVE-value (bettingco): движок крутится на своём таймере (startValueEngine, ~1с). Тут — страховка
   // старта/остановки по настройкам (valueMode + ключ Betano-фида). Старый oddspapi/ps3838-путь отключён. ──
-  if (valueRun && settings.bettingcoKey) { if (!valueEngine && !valueEngineStarting && Date.now() > valueEngineNextTry) startValueEngine().catch(() => {}); }
-  else { if (valueEngine || valueEngineTimer || valueEngineStarting) stopValueEngine(); if (!valueBusy) sendValuePulse({ on: false }); }
+  if (settings.prematchMode) {
+    // ПРЕМАТЧ вместо лайва: лайв-движок гасим, прематч держим поднятым, пока идёт сессия и задан прематч-ключ.
+    if (valueEngine || valueEngineTimer || valueEngineStarting) stopValueEngine();
+    if (valueRun && settings.prematchKey) { if (!prematchEngine && !prematchStarting && Date.now() > prematchNextTry) startPrematchEngine().catch(() => {}); }
+    else { if (prematchEngine) stopPrematchEngine(); if (!valueBusy) sendValuePulse({ on: false }); }
+  } else {
+    if (prematchEngine) stopPrematchEngine();
+    if (valueRun && settings.bettingcoKey) { if (!valueEngine && !valueEngineStarting && Date.now() > valueEngineNextTry) startValueEngine().catch(() => {}); }
+    else { if (valueEngine || valueEngineTimer || valueEngineStarting) stopValueEngine(); if (!valueBusy) sendValuePulse({ on: false }); }
+  }
   // ── surebet-фид (legacy): окно surebet больше не создаётся → блок ниже не выполняется ──
   if (!running || !surebetWin || surebetWin.isDestroyed()) return;
   const r = await readSurebet(surebetWin.webContents);
@@ -2520,6 +2680,12 @@ ipcMain.handle("save-settings", (_e, patch) => {
   if (typeof patch.valueLive === "boolean") clean.valueLive = patch.valueLive;
   if (typeof patch.valuePlace === "boolean") clean.valuePlace = patch.valuePlace;
   if (typeof patch.valueRandomTest === "boolean") clean.valueRandomTest = patch.valueRandomTest; // эксперимент: рандом-ставки
+  // ПРЕМАТЧ (одно плечо вилки). Ключ — секрет: пустой не затирает сохранённый.
+  if (typeof patch.prematchMode === "boolean") clean.prematchMode = patch.prematchMode;
+  if (typeof patch.prematchKey === "string" && patch.prematchKey.trim()) clean.prematchKey = patch.prematchKey.trim();
+  if (patch.prematchMinArb !== undefined) clean.prematchMinArb = Math.min(0.5, Math.max(0, Number(patch.prematchMinArb) || 0));
+  if (patch.prematchGridSec !== undefined) clean.prematchGridSec = Math.min(600, Math.max(10, Number(patch.prematchGridSec) || 120));
+  if (Array.isArray(patch.prematchSports)) clean.prematchSports = patch.prematchSports.map(Number).filter((n) => Number.isInteger(n) && n > 0);
   if (typeof patch.valuePlaceRequireArb === "boolean") clean.valuePlaceRequireArb = patch.valuePlaceRequireArb;
   if (Array.isArray(patch.valuePlaceKinds)) clean.valuePlaceKinds = patch.valuePlaceKinds.map(String);
   if (patch.valuePlaceDupExtra !== undefined) clean.valuePlaceDupExtra = Math.max(0, Number(patch.valuePlaceDupExtra) || 0);
@@ -2558,8 +2724,9 @@ ipcMain.handle("save-settings", (_e, patch) => {
 // Запуск/остановка value-сессии ОТДЕЛЬНОЙ кнопкой (не тумблером): конфиг выставляешь спокойно, потом «Запустить».
 ipcMain.handle("value-run", (_e, on) => {
   valueRun = !!on;
-  if (valueRun) { valueEngineNextTry = 0; startValueEngine().catch((e) => logger.log("ERROR", "startValueEngine:", e && e.message)); }
-  else stopValueEngine();
+  if (valueRun && settings.prematchMode) { prematchNextTry = 0; startPrematchEngine().catch((e) => logger.log("ERROR", "startPrematchEngine:", e && e.message)); }
+  else if (valueRun) { valueEngineNextTry = 0; startValueEngine().catch((e) => logger.log("ERROR", "startValueEngine:", e && e.message)); }
+  else { stopValueEngine(); stopPrematchEngine(); }
   pushStatus();
   return valueRun;
 });

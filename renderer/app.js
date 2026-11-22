@@ -40,6 +40,11 @@ function renderStatus(s) {
     if ($("valuePlaceRequireArb")) $("valuePlaceRequireArb").checked = !!v.valuePlaceRequireArb;
     if ($("valuePlaceMlOnly")) $("valuePlaceMlOnly").checked = Array.isArray(v.valuePlaceKinds) && v.valuePlaceKinds.length === 1 && v.valuePlaceKinds[0] === "ML";
     $("bettingcoKey").value = v.bettingcoKey || "";   // ключ Betano-фида (bettingco), показываем целиком (его машина)
+    // ПРЕМАТЧ: тумблер, ключ, порог вилки (доля → %), сетка оценки
+    if ($("prematchMode")) $("prematchMode").checked = !!v.prematchMode;
+    if ($("prematchKey")) $("prematchKey").value = v.prematchKey || "";
+    if ($("prematchMinArb")) $("prematchMinArb").value = Math.round((v.prematchMinArb != null ? v.prematchMinArb : 0.005) * 10000) / 100;
+    if ($("prematchGridSec")) $("prematchGridSec").value = v.prematchGridSec != null ? v.prematchGridSec : 120;
     valueSportsState = (v.valueSports && v.valueSports.length) ? v.valueSports.map((x) => ({ ...x })) : [];
     valueMarketsState = Array.isArray(v.valueMarkets) ? v.valueMarkets.slice() : [];
     renderValueSports();
@@ -188,6 +193,11 @@ function saveValue() {
     valueMarkets: valueMarketsState.slice(),
   };
   const k = $("bettingcoKey").value.trim(); if (k) patch.bettingcoKey = k;
+  // ПРЕМАТЧ
+  if ($("prematchMode")) patch.prematchMode = $("prematchMode").checked;
+  if ($("prematchMinArb")) patch.prematchMinArb = Math.max(0, Number($("prematchMinArb").value) || 0) / 100; // % → доля
+  if ($("prematchGridSec")) patch.prematchGridSec = Number($("prematchGridSec").value) || 120;
+  const pk = $("prematchKey") ? $("prematchKey").value.trim() : ""; if (pk) patch.prematchKey = pk;
   return window.api.saveSettings(patch); // поле НЕ очищаем — ключ остаётся виден
 }
 if ($("valueSave")) $("valueSave").onclick = async () => {
@@ -199,6 +209,7 @@ if ($("valueLive")) $("valueLive").onchange = () => saveValue().then(() => { $("
 if ($("valuePlace")) $("valuePlace").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valuePlace").checked ? "🅱️ простановка ВКЛ" : "простановка выкл"; }).catch(() => {});
 if ($("valueRandomTest")) $("valueRandomTest").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valueRandomTest").checked ? "🎲 РАНДОМ-ТЕСТ ВКЛ — ставим случайное (эксперимент)" : "рандом-тест выкл"; }).catch(() => {});
 if ($("valuePlaceRequireArb")) $("valuePlaceRequireArb").onchange = () => saveValue().catch(() => {});
+if ($("prematchMode")) $("prematchMode").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("prematchMode").checked ? "🕒 ПРЕМАТЧ включён — применится при запуске сессии (простановка только dry-run)" : "прематч выключен — сессия пойдёт по лайву"; }).catch(() => {});
 if ($("valuePlaceMlOnly")) $("valuePlaceMlOnly").onchange = () => saveValue().catch(() => {});
 if ($("octoBlockResources")) $("octoBlockResources").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("octoBlockResources").checked ? "видео-блок ВКЛ (применится при след. подключении Octo)" : "видео-блок ВЫКЛ (перезапусти Octo-окно)"; }).catch(() => {});
 // АВТО-СОХРАНЕНИЕ ВСЕЙ СЕКЦИИ: любое изменение поля/галочки в карточке value сохраняет конфиг сразу —
