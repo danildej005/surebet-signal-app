@@ -1727,7 +1727,13 @@ async function tryPlacePrematch(eng) {
   c.softGate = true; // dry-run: дойти до купона, даже если цена на странице уже ушла
   const booker = findBooker("betano");
   const target = betanoTarget(booker && booker.url);           // ссылка фида (betano.cz) → домен аккаунта
-  if (target) c.url = localizeBetanoUrl(c.url, target);
+  if (!target) {
+    // Адрес сайта не задан — НЕ открываем ссылку фида как есть: это чужой страновой сайт (betano.cz), не аккаунт владельца.
+    if (Date.now() - prematchNoStakeAt > 60000) { prematchNoStakeAt = Date.now(); logger.log("WARN", "[прематч] не задан адрес сайта Betano (раздел «Betano · Octo», поле «Сайт Betano») — события не открываю"); }
+    return;
+  }
+  c.url = localizeBetanoUrl(c.url, target);
+  if (!c.url.includes(target.host)) { logger.log("WARN", "[прематч] ссылку события не удалось перевести на " + target.host + ": " + c.url + " — пропуск"); prematchTried.add(a.pairId + "|" + a.key); return; }
   prematchTried.add(a.pairId + "|" + a.key); prematchPerPair.set(a.pairId, (prematchPerPair.get(a.pairId) || 0) + 1);
   prematchPlaceBusy = true;
   logger.log("INFO", "[прематч] DRY-RUN " + prematchSport(a.sportType) + " | " + a.t1 + " — " + a.t2 + " | " + a.what + " | Betano " + a.price + " / Pinnacle " + Number(a.opp).toFixed(3) +
