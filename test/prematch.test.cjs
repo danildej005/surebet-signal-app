@@ -10,7 +10,7 @@ const { PrematchEngine } = require("../lib/prematch/engine.cjs");
 const { settle, parseFlashscore } = require("../lib/prematch/settle.cjs");
 const { pairCheck } = require("../lib/prematch/guard.cjs");
 const { ruleBlock } = require("../lib/prematch/rules.cjs");
-const { legacyOf, arbToCandidate, arbAtPrice, choosePrematch } = require("../lib/prematch/place.cjs");
+const { legacyOf, arbToCandidate, arbAtPrice, choosePrematch, outcomeGroup, isFullMatch } = require("../lib/prematch/place.cjs");
 const { verifyPick, verifySlipMarket } = require("../lib/bookers.cjs");
 const { parseMatchInfo, pinnacleCountry, identityCheck, makeDirectory } = require("../lib/prematch/sportradar.cjs");
 
@@ -426,6 +426,24 @@ test("place: выбор вилки — порог, виды спорта, све
   assert.strictEqual(choosePrematch([], {}).skip, "вилок нет");
   // вилка при цене страницы: кнопка просела с 2.10 до 1.95 → вилки уже нет
   assert.ok(arbAtPrice(2.1, 2.0) > 0); assert.ok(arbAtPrice(1.95, 2.0) < 0);
+});
+
+test("place: галочки панели — исходы, отрезок матча, потолок вилки", () => {
+  assert.strictEqual(outcomeGroup("FT|x|0|h"), "win"); assert.strictEqual(outcomeGroup("/Main/Main|ml|0|a"), "win");
+  assert.strictEqual(outcomeGroup("1H|x|0|d"), "draw"); assert.strictEqual(outcomeGroup("FT|tt2|1.5|o"), "tt");
+  assert.strictEqual(outcomeGroup("FT|dnb|0|h"), "dnb"); assert.strictEqual(outcomeGroup("/Main/Main/Game|hc|3.5|a"), "hc");
+  for (const k of ["FT|tot|2.5|o", "/Main/Main|ml|0|h", "/Main/Main/Game|tot|21.5|u", "/Main/Main/Overtime|hc|-5.5|h"]) assert.strictEqual(isFullMatch(k), true);
+  for (const k of ["1H|x|0|h", "/Set/Main/1|tot|9.5|o", "/Half/Main/1|ml|0|h", "/Quarter/Main/1|tot|50.5|u", "/Map/Main/1|ml|0|a"]) assert.strictEqual(isFullMatch(k), false);
+  const win = mkArb({ arb: 0.02 }), tot = mkArb({ key: "/Main/Main/Game|tot|21.5|u", arb: 0.03 }), set1 = mkArb({ key: "/Set/Main/1|tot|9.5|o", arb: 0.04 });
+  assert.strictEqual(choosePrematch([win, tot, set1], { minArb: 0 }).arb, set1);                       // без ограничений — самая большая
+  assert.strictEqual(choosePrematch([win, tot, set1], { minArb: 0, parts: false }).arb, tot);          // части матча выключены
+  assert.strictEqual(choosePrematch([win, tot, set1], { minArb: 0, outcomes: ["win"] }).arb, win);     // только победа
+  assert.strictEqual(choosePrematch([win, tot, set1], { minArb: 0, full: false }).arb, set1);          // только части
+  assert.strictEqual(choosePrematch([win, tot, set1], { minArb: 0, maxArb: 0.035 }).arb, tot);         // потолок вилки
+  assert.match(choosePrematch([win], { minArb: 0, outcomes: ["tot"] }).skip, /исход выключен/);
+  assert.match(choosePrematch([set1], { minArb: 0, parts: false }).skip, /отрезок выключен/);
+  assert.match(choosePrematch([set1], { minArb: 0, maxArb: 0.01 }).skip, /больше потолка/);
+  assert.strictEqual(choosePrematch([win], { minArb: 0, outcomes: [], sports: [] }).arb, win);          // пустые списки = всё включено
 });
 
 // ───────────────────────── сверка матча по номеру Sportradar ─────────────────────────

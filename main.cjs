@@ -121,10 +121,12 @@ function createSurebetWindow() {
 function createPanelWindow() {
   if (panelWin && !panelWin.isDestroyed()) { panelWin.show(); panelWin.focus(); return; }
   panelWin = new BrowserWindow({
-    width: 460,
-    height: 560,
+    width: 1040,
+    height: 780,
+    minWidth: 860,
+    minHeight: 600,
     title: "Surebet Signal — панель",
-    resizable: false,
+    resizable: true, // было 460×560 без изменения размера — в такое окно настройки не помещались
     webPreferences: { preload: join(__dirname, "preload-control.cjs") },
   });
   panelWin.loadFile(join(__dirname, "renderer", "index.html"));
@@ -1616,7 +1618,9 @@ function stopValueEngine() {
 // цену фида с ценой кнопки и собрать ярлыки купона по рынкам, которых судьи ещё не знают.
 let prematchEngine = null, prematchStarting = false, prematchNextTry = 0, prematchPlaceBusy = false, prematchDiagAt = 0, prematchNoStakeAt = 0;
 const prematchTried = new Set(), prematchPerPair = new Map();
-const PREMATCH_PAUSE_MS = 5000; // пауза между запросами к фиду: конторы опрашиваются по очереди, каждая раз в ~10 с
+const PREMATCH_PAUSE_MS = 1000; // пауза между запросами к фиду: конторы опрашиваются по очереди, каждая раз в ~2 с (фид разрешает до 2 раз в секунду)
+// Виды спорта прематча, включённые в панели (раздел «Спорт и исходы»); пусто = все, что умеет движок.
+const prematchSportsOn = () => (Array.isArray(settings.betSports) ? settings.betSports.map(Number).filter((n) => n > 0) : []);
 const prematchPct = (v) => (v == null ? "—" : (v * 100).toFixed(2) + "%");
 const prematchSport = (t) => require("./lib/bettingco.cjs").sportName(Number(t));
 function prematchAppend(file, obj) {
@@ -1633,10 +1637,14 @@ async function startPrematchEngine() {
   prematchStarting = true;
   try {
     const day = () => new Date().toISOString().slice(0, 10);
-    const sports = Array.isArray(settings.prematchSports) && settings.prematchSports.length ? settings.prematchSports.map(Number) : undefined;
+    // Движок грузит только включённые виды спорта (из тех, что умеет). Сменил галочки посреди сессии — фильтр на
+    // выборе вилки (tryPlacePrematch) подействует сразу, а состав загруженных видов обновится при следующем запуске.
+    const { DEFAULT_SPORTS } = require("./lib/prematch/engine.cjs");
+    const on = prematchSportsOn().filter((n) => DEFAULT_SPORTS.includes(n));
+    const sports = on.length ? on : undefined;
     const eng = new PrematchEngine({
       feed: prematchFeed.makeFeed(settings.prematchKey), directory: prematchSr.makeDirectory(), sports,
-      gridMs: Math.max(10, Number(settings.prematchGridSec) || 120) * 1000,
+      gridMs: 0, // вилки пересчитываются после КАЖДОГО опроса фида (сетка 2 минуты из хендбука нужна была только для записи)
       onLog: (lvl, msg) => logger.log(lvl === "WARN" ? "WARN" : "INFO", "[прематч] " + msg),
       onArb: (r, kind) => {
         if (kind === "new") logger.log("INFO", "[прематч] 🎯 ВИЛКА " + prematchPct(r.arb) + " | " + prematchSport(r.sportType) + " | " + r.t1 + " — " + r.t2 + " | " + r.what +
@@ -1649,7 +1657,9 @@ async function startPrematchEngine() {
     prematchEngine = eng; prematchTried.clear(); prematchPerPair.clear();
     logger.log("INFO", "[прематч] КОНФИГ: режим=DRY-RUN (кнопка ставки не нажимается) · простановка=" + (settings.valuePlace ? "ВКЛ" : "выкл") + " · octoMode=" + (settings.octoMode ? "ВКЛ" : "выкл") +
       " · мин. вилка=" + prematchPct(Number(settings.prematchMinArb) || 0) + " · стейк=" + (Number(settings.valueStake) || 0) +
-      " · сетка=" + Math.round(eng.gridMs / 1000) + "с · спорт=" + (sports ? sports.join(",") : "набор по умолчанию") + " · проверка матча по номеру Sportradar=ВКЛ" +
+      " · вилка до=" + (Number(settings.prematchMaxArb) ? prematchPct(Number(settings.prematchMaxArb)) : "без потолка") +
+      " · спорт=" + (sports ? sports.map(prematchSport).join(", ") : "все") + " · исходы=" + ((settings.betOutcomes && settings.betOutcomes.length) ? settings.betOutcomes.join(",") : "все") +
+      " · весь матч=" + (settings.betFull !== false ? "да" : "нет") + " · части матча=" + (settings.betParts !== false ? "да" : "нет") + " · проверка матча по номеру Sportradar=ВКЛ" +
       (settings.valueLive ? " · ВНИМАНИЕ: тумблер «Боевой» включён, но на прематч он не действует" : ""));
     sendValuePulse({ on: true, live: false, scanning: true, error: "", note: "прематч: загрузка фида (может занять несколько минут)…" });
     prematchLoop(eng).catch((e) => logger.log("ERROR", "[прематч] цикл:", e && e.message));
@@ -1700,8 +1710,9 @@ async function prematchLoop(eng) {
 // кнопки с ценой фида, открыть купон и снять ярлык рынка. Кнопку ставки НЕ нажимаем (live=false).
 async function tryPlacePrematch(eng) {
   if (prematchPlaceBusy || botBusy || valueBusy || valuePlaceBusy) return;
-  const cfg = { minArb: Number(settings.prematchMinArb) || 0, oddsMin: Number(settings.valueOddsMin) || 0, oddsMax: Number(settings.valueOddsMax) || 0,
-    minToStartMin: eng.minToStartMin, maxPerPair: 2 };
+  const cfg = { minArb: Number(settings.prematchMinArb) || 0, maxArb: Number(settings.prematchMaxArb) || 0,
+    oddsMin: Number(settings.valueOddsMin) || 0, oddsMax: Number(settings.valueOddsMax) || 0, minToStartMin: eng.minToStartMin, maxPerPair: 2,
+    sports: prematchSportsOn(), outcomes: Array.isArray(settings.betOutcomes) ? settings.betOutcomes : [], full: settings.betFull !== false, parts: settings.betParts !== false };
   // пока матч не сверен по номеру Sportradar — не трогаем его (сверка занимает секунды)
   const arbs = eng.scan().filter((a) => a.identity != null);
   const pick = prematchPlace.choosePrematch(arbs, cfg, { tried: prematchTried, perPair: prematchPerPair });
@@ -1878,6 +1889,9 @@ async function tryPlaceFromValueSignals(sigs) {
     marketExtra: Number(settings.valuePlaceMarketExtra) || 0,  // доп ставок в одном маркете (фора/тотал/победа)
     kinds: (settings.valuePlaceKinds && settings.valuePlaceKinds.length) ? settings.valuePlaceKinds : null,
   };
+  // Раздел панели «Спорт и исходы»: выключенные виды спорта в простановку не идут. Пустой список = все (как было).
+  const sportsOn = Array.isArray(settings.betSports) ? settings.betSports.map(Number) : [];
+  if (sportsOn.length) sigs = sigs.filter((s) => sportsOn.includes(Number(s.sportType)));
   const pick = valueplace.choosePlacement(sigs, cfg, { placedToday: valuePlaceCount, maxPerDay: cfg.maxPerDay, placed: valuePlaced });
   // Диагностика воронки (раз в ~20с) — на dry-run видно, ПОЧЕМУ ставим/не ставим (сигналы/годные/без ссылки).
   if (Date.now() - valuePlaceDiagAt > 20000) {
@@ -2684,8 +2698,12 @@ ipcMain.handle("save-settings", (_e, patch) => {
   if (typeof patch.prematchMode === "boolean") clean.prematchMode = patch.prematchMode;
   if (typeof patch.prematchKey === "string" && patch.prematchKey.trim()) clean.prematchKey = patch.prematchKey.trim();
   if (patch.prematchMinArb !== undefined) clean.prematchMinArb = Math.min(0.5, Math.max(0, Number(patch.prematchMinArb) || 0));
-  if (patch.prematchGridSec !== undefined) clean.prematchGridSec = Math.min(600, Math.max(10, Number(patch.prematchGridSec) || 120));
-  if (Array.isArray(patch.prematchSports)) clean.prematchSports = patch.prematchSports.map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  if (patch.prematchMaxArb !== undefined) clean.prematchMaxArb = Math.min(1, Math.max(0, Number(patch.prematchMaxArb) || 0));
+  // Раздел «Спорт и исходы»: пустой список = включено всё
+  if (Array.isArray(patch.betSports)) clean.betSports = patch.betSports.map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  if (Array.isArray(patch.betOutcomes)) clean.betOutcomes = patch.betOutcomes.map(String).filter((x) => /^(win|draw|dc|dnb|hc|tot|tt)$/.test(x));
+  if (typeof patch.betFull === "boolean") clean.betFull = patch.betFull;
+  if (typeof patch.betParts === "boolean") clean.betParts = patch.betParts;
   if (typeof patch.valuePlaceRequireArb === "boolean") clean.valuePlaceRequireArb = patch.valuePlaceRequireArb;
   if (Array.isArray(patch.valuePlaceKinds)) clean.valuePlaceKinds = patch.valuePlaceKinds.map(String);
   if (patch.valuePlaceDupExtra !== undefined) clean.valuePlaceDupExtra = Math.max(0, Number(patch.valuePlaceDupExtra) || 0);

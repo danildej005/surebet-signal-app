@@ -6,110 +6,253 @@
   <title>Surebet Signal</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body>
-  <h1>Surebet&nbsp;Signal <span id="appVer" style="font-size:12px; color:#7f8c8d; font-weight:normal;"></span></h1>
+<!-- Класс mode-live / mode-prematch ставит app.js: элементы с data-mode показываются только в своём режиме. -->
+<body class="mode-live">
+  <!-- ШАПКА: что сейчас происходит и главная кнопка -->
+  <header class="top">
+    <div class="brand">Surebet Signal<span id="appVer"></span></div>
+    <div class="status" id="valuePulse">
+      <span class="chip" id="pulseChip">выключен</span>
+      <span id="pulseMain">Сессия не запущена</span>
+      <div id="pulseSub"></div>
+      <div class="err" id="lastError"></div>
+    </div>
+    <div class="top-actions">
+      <button id="valueRunBtn" class="big">▶ Запустить сессию</button>
+      <button id="openLogs" class="ghost big">Логи</button>
+    </div>
+  </header>
 
-  <section class="card" id="statusCard">
-    <div id="valuePulse" style="margin:2px 0; font-size:14px;">🎯 value: выключен</div>
-    <div class="err" id="lastError"></div>
-  </section>
+  <div class="shell">
+    <!-- РАЗДЕЛЫ -->
+    <nav class="nav" id="nav">
+      <button data-tab="session" class="on">Сессия<small>режим, ставка, ключ</small></button>
+      <button data-tab="scope">Спорт и исходы<small>на что ставить</small></button>
+      <button data-tab="filters">Фильтры<small>какие сигналы брать</small></button>
+      <button data-tab="betano">Betano · Octo<small>профиль, вход, тест купона</small></button>
+      <button data-tab="telegram">Telegram<small>уведомления</small></button>
+      <button data-tab="more">Прочее<small>браузер, эксперименты</small></button>
+      <div class="nav-foot">Настройки сохраняются сами при изменении.</div>
+    </nav>
 
-  <div class="muted hint" id="saveHint"></div>
+    <div class="content">
+      <!-- всё, что внутри #valueCard, сохраняется автоматически при изменении (см. app.js) -->
+      <div id="valueCard">
 
-  <section class="card">
-    <h2>Конторы / аккаунты (антидетект)</h2>
-    <div id="bookers"></div>
-    <div class="muted">У каждой конторы — своя сессия, прокси и отпечаток. «Войти» открывает её окно; логин сохраняется. Кнопка «Тест (dry-run)» на карточке проверяет простановку без реальной ставки. «Снять купон» — снимок разметки конторы (для отладки).</div>
-  </section>
+        <!-- ══════════ СЕССИЯ ══════════ -->
+        <section class="panel on" data-panel="session">
+          <h2>Сессия</h2>
+          <p class="lead">Выбери режим, проверь сумму и ключ — и запускай кнопкой вверху.</p>
 
-  <section class="card">
-    <details>
-      <summary><b>📨 Сигналы в Telegram</b></summary>
-      <p class="muted">Уведомления о реально поставленных value-ставках. Токен и chat_id нужны для этих сообщений.</p>
-      <label>Токен бота<input id="tgToken" type="text" placeholder="вставь токен бота" autocomplete="off" /></label>
-      <label>Chat ID (куда слать)<input id="tgChat" type="text" placeholder="напр. 123456789 или -100…" autocomplete="off" /></label>
-      <div class="row" style="margin-top:8px;">
-        <button id="tgSave">Сохранить</button>
-        <button id="tgTest" class="ghost">Проверить (тест-сообщение)</button>
+          <div class="card">
+            <h3>Режим работы</h3>
+            <label class="set">
+              <span class="set-t">Прематч — одно плечо вилки<small>Вкл: вилки до начала матча. Выкл: лайв.</small></span>
+              <input type="checkbox" class="sw" id="prematchMode" />
+            </label>
+            <div class="set">
+              <span class="set-t">Ставки<small>Dry-run: бот открывает событие, выбирает исход и заполняет купон, но ставку не отправляет. Боевой: отправляет.</small>
+                <small data-mode="prematch">В прематче пока всегда dry-run — «Боевой» на него не действует.</small></span>
+              <span class="seg">
+                <label><input type="radio" name="betMode" id="modeDry" checked /><span>Dry-run</span></label>
+                <label class="live"><input type="radio" name="betMode" id="modeLive" /><span>Боевой</span></label>
+              </span>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Ставка</h3>
+            <label class="set">
+              <span class="set-t">Сумма ставки<small>Фиксированная, в валюте аккаунта Betano.</small></span>
+              <input id="valueStake" type="number" min="0" step="1" placeholder="напр. 1500" />
+            </label>
+            <label class="set" data-mode="live">
+              <span class="set-t">Лимит ставок в сутки<small>После него бот только ищет сигналы.</small></span>
+              <input id="valueMaxPerDay" type="number" min="0" step="1" placeholder="20" />
+            </label>
+          </div>
+
+          <div class="card">
+            <h3>Ключ фида bettingco</h3>
+            <label class="set" data-mode="live">
+              <span class="set-t">Ключ лайва</span>
+              <input id="bettingcoKey" class="wide" type="text" placeholder="вставь ключ" autocomplete="off" />
+            </label>
+            <label class="set" data-mode="prematch">
+              <span class="set-t">Ключ прематча<small>Отдельный от лайва. Один ключ — одна программа.</small></span>
+              <input id="prematchKey" class="wide" type="text" placeholder="вставь ключ прематча" autocomplete="off" />
+            </label>
+          </div>
+        </section>
+
+        <!-- ══════════ СПОРТ И ИСХОДЫ ══════════ -->
+        <section class="panel" data-panel="scope">
+          <h2>Спорт и исходы</h2>
+          <p class="lead">Сними галочку — бот перестанет брать этот вид спорта или исход.</p>
+
+          <div class="card">
+            <h3>Виды спорта</h3>
+            <div class="checks" id="betSports"></div>
+          </div>
+
+          <div class="card">
+            <h3>Исходы</h3>
+            <div class="checks" id="betOutcomes"></div>
+          </div>
+
+          <div class="card" data-mode="prematch">
+            <h3>Отрезок матча</h3>
+            <label class="set">
+              <span class="set-t">Весь матч</span>
+              <input type="checkbox" class="sw" id="betFull" checked />
+            </label>
+            <label class="set">
+              <span class="set-t">Части матча<small>Тайм, половина, четверть, период, сет, карта.</small></span>
+              <input type="checkbox" class="sw" id="betParts" checked />
+            </label>
+          </div>
+        </section>
+
+        <!-- ══════════ ФИЛЬТРЫ ══════════ -->
+        <section class="panel" data-panel="filters">
+          <h2>Фильтры</h2>
+          <p class="lead">Какие сигналы бот берёт.</p>
+
+          <div class="card">
+            <h3>Сигнал</h3>
+            <div class="set" data-mode="prematch">
+              <span class="set-t">Вилка, %<small>От — меньше не берём. До — больше не берём: очень большая вилка чаще ошибка. Пусто — без потолка.</small></span>
+              <span class="pair">от <input id="prematchMinArb" type="number" min="0" step="0.1" placeholder="0.5" /> до <input id="prematchMaxArb" type="number" min="0" step="0.5" placeholder="—" /></span>
+            </div>
+            <div class="set" data-mode="live">
+              <span class="set-t">Перевес (value), %<small>От — порог входа. До — потолок: выше считается ошибкой данных.</small></span>
+              <span class="pair">от <input id="valueThreshold" type="number" min="0" step="0.1" placeholder="5" /> до <input id="valueThresholdMax" type="number" min="0" step="0.5" placeholder="25" /></span>
+            </div>
+            <div class="set">
+              <span class="set-t">Коэффициент Betano<small>Пусто или 0 — без границы.</small></span>
+              <span class="pair">от <input id="valueOddsMin" type="number" min="0" step="0.05" placeholder="—" /> до <input id="valueOddsMax" type="number" min="0" step="0.05" placeholder="—" /></span>
+            </div>
+          </div>
+
+          <div class="card" data-mode="live">
+            <h3>Наибольшая маржа Pinnacle по видам спорта, %</h3>
+            <div class="tiles">
+              <label>Теннис<input id="margin_3" type="number" min="0" step="0.5" placeholder="—" /></label>
+              <label>Футбол<input id="margin_1" type="number" min="0" step="0.5" placeholder="—" /></label>
+              <label>CS<input id="margin_29" type="number" min="0" step="0.5" placeholder="—" /></label>
+              <label>Dota<input id="margin_30" type="number" min="0" step="0.5" placeholder="—" /></label>
+              <label>LoL<input id="margin_31" type="number" min="0" step="0.5" placeholder="—" /></label>
+              <label>Valorant<input id="margin_32" type="number" min="0" step="0.5" placeholder="—" /></label>
+              <label>Баскетбол<input id="margin_4" type="number" min="0" step="0.5" placeholder="—" /></label>
+              <label>Волейбол<input id="margin_5" type="number" min="0" step="0.5" placeholder="—" /></label>
+              <label>Бейсбол<input id="margin_9" type="number" min="0" step="0.5" placeholder="—" /></label>
+            </div>
+            <div class="body muted" style="margin:0; padding-top:0;">Сигнал с маржой эталона выше — пропускается. Пусто — без фильтра. Ориентир: теннис 4–5, киберспорт 6.5–10.</div>
+          </div>
+
+          <div class="card" data-mode="live">
+            <h3>Повторные ставки</h3>
+            <label class="set">
+              <span class="set-t">Ещё ставок в том же матче<small>0 — одна ставка на матч.</small></span>
+              <input id="valuePlaceEventExtra" type="number" min="0" step="1" placeholder="0" />
+            </label>
+            <label class="set">
+              <span class="set-t">Ещё ставок в том же рынке<small>Фора, тотал или победа одного матча.</small></span>
+              <input id="valuePlaceMarketExtra" type="number" min="0" step="1" placeholder="0" />
+            </label>
+            <label class="set">
+              <span class="set-t">Повторов того же исхода</span>
+              <input id="valuePlaceDupExtra" type="number" min="0" step="1" placeholder="0" />
+            </label>
+          </div>
+        </section>
+
+        <!-- ══════════ ПРОЧЕЕ ══════════ -->
+        <section class="panel" data-panel="more">
+          <h2>Прочее</h2>
+          <p class="lead">То, что трогают редко.</p>
+
+          <div class="card">
+            <h3>Браузер</h3>
+            <label class="set">
+              <span class="set-t">Не грузить live-видео на Betano<small>Экономит трафик прокси. Применяется при следующем подключении Octo.</small></span>
+              <input type="checkbox" class="sw" id="octoBlockResources" checked />
+            </label>
+            <label class="set">
+              <span class="set-t">Обновлять страницу, сек<small>Защита от разлогина. Реже — меньше трафика; минимум 45.</small></span>
+              <input id="keepAliveSec" type="number" min="45" step="15" placeholder="180" />
+            </label>
+          </div>
+
+          <div class="card" data-mode="live">
+            <h3>Эксперимент</h3>
+            <label class="set danger">
+              <span class="set-t">Случайные ставки<small>Ставить случайные исходы без фильтров — проверка, за что режут аккаунт. Тратит деньги.</small></span>
+              <input type="checkbox" class="sw" id="valueRandomTest" />
+            </label>
+          </div>
+
+          <div class="card">
+            <h3>Старое</h3>
+            <div class="body">
+              <details>
+                <summary>Рынки старого источника</summary>
+                <div id="valueMarkets"></div>
+              </details>
+              <details>
+                <summary>Виды спорта и лиги старого источника (oddspapi) — не используется</summary>
+                <div id="valueSports"></div>
+              </details>
+              <div class="row" style="margin-top:12px;">
+                <button id="toggleRun" class="ghost">Пауза / возобновить опрос surebet</button>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
-      <div class="muted" id="tgResult"></div>
-    </details>
-  </section>
 
-  <section class="card" id="valueCard">
-    <h2>🎯 Value-режим (прематч)</h2>
-    <p class="muted">Эталон Pinnacle (снимаем маржу) vs Betano — оба плеча из одного live-фида (bettingco). Ставит ОДИНОЧКУ на betano.bg, когда Betano выгоднее честной линии на заданный порог. Включается тумблером ниже.</p>
-    <label>Ключ Betano-фида (bettingco, X-Api-Key)<input id="bettingcoKey" type="text" placeholder="вставь ключ" autocomplete="off" /></label>
-    <div class="subbox">
-      <label class="liverow"><input type="checkbox" id="prematchMode" /> <b>🕒 ПРЕМАТЧ</b> — искать вилки «одно плечо на Betano» на прематч-фиде <b>вместо</b> лайва. Простановка в этом режиме — <b>только dry-run</b>: бот открывает событие, сверяет цену кнопки и снимает ярлык купона, кнопку ставки не нажимает (тумблер «Боевой» на прематч не действует)</label>
-      <label>Ключ ПРЕМАТЧ-фида (bettingco; отдельный от лайв-ключа, один ключ — одна программа)<input id="prematchKey" type="text" placeholder="вставь ключ прематча" autocomplete="off" /></label>
-      <div class="grid2">
-        <label>Мин. вилка, %<input id="prematchMinArb" type="number" min="0" step="0.1" placeholder="0.5" /></label>
-        <label>Сетка оценки, сек<input id="prematchGridSec" type="number" min="10" step="10" placeholder="120" /></label>
-      </div>
-      <div class="muted">Для попыток на странице нужны «🅱️ Простановка» и сумма в поле «Ставка фикс». Журналы — в папке логов, подпапка prematch.</div>
-    </div>
-    <details class="subbox">
-      <summary class="muted">Спорты/лиги старого источника (oddspapi) — <b>не используется</b>: сканер bettingco берёт все спорты фида автоматически</summary>
-      <div class="muted">Секция оставлена для истории. «oddspapi: таймаут /tournaments» здесь безвреден — текущий детект/ставки от секции не зависят.</div>
-      <div id="valueSports"></div>
-    </details>
-    <div class="subbox">
-      <div class="muted">Маркеты — что ставим (сними галочку, чтобы исключить)</div>
-      <div id="valueMarkets"></div>
-    </div>
-    <div class="grid2">
-      <label>Порог value ОТ, %<input id="valueThreshold" type="number" min="0" step="0.1" placeholder="напр. 5" /></label>
-      <label>Потолок value ДО, %<input id="valueThresholdMax" type="number" min="0" step="0.5" placeholder="напр. 25 (выше = артефакт)" /></label>
-    </div>
-    <div class="grid2">
-      <label>Ставка фикс (валюта Betano)<input id="valueStake" type="number" min="0" step="1" placeholder="напр. 10" /></label>
-      <label>Обновление страницы (сек)<input id="keepAliveSec" type="number" min="45" step="15" placeholder="180 (реже = меньше трафика)" /></label>
-    </div>
-    <div class="grid2">
-      <label>Кэф от<input id="valueOddsMin" type="number" min="0" step="0.05" placeholder="0 = без границы" /></label>
-      <label>Кэф до<input id="valueOddsMax" type="number" min="0" step="0.05" placeholder="0 = без границы" /></label>
-    </div>
-    <label>Лимит ставок в сутки<input id="valueMaxPerDay" type="number" min="0" step="1" placeholder="20" /></label>
-    <div class="subbox">
-      <div class="muted">Макс. маржа Pinnacle по спортам, % (пусто = без фильтра; сигнал с маржой эталона выше — режется). Ориентиры: теннис 4–5%, кибер 6.5–10%</div>
-      <div class="grid2">
-        <label>Теннис<input id="margin_3" type="number" min="0" step="0.5" placeholder="—" /></label>
-        <label>Футбол<input id="margin_1" type="number" min="0" step="0.5" placeholder="—" /></label>
-        <label>CS<input id="margin_29" type="number" min="0" step="0.5" placeholder="—" /></label>
-        <label>Dota<input id="margin_30" type="number" min="0" step="0.5" placeholder="—" /></label>
-        <label>LoL<input id="margin_31" type="number" min="0" step="0.5" placeholder="—" /></label>
-        <label>Valorant<input id="margin_32" type="number" min="0" step="0.5" placeholder="—" /></label>
-        <label>Баскетбол<input id="margin_4" type="number" min="0" step="0.5" placeholder="—" /></label>
-        <label>Волейбол<input id="margin_5" type="number" min="0" step="0.5" placeholder="—" /></label>
-        <label>Бейсбол<input id="margin_9" type="number" min="0" step="0.5" placeholder="—" /></label>
-      </div>
-    </div>
-    <label class="liverow"><input type="checkbox" id="octoBlockResources" checked /> 📉 Резать <b>live-видео</b> на страницах Betano (автостартует и жрёт прокси; выключай только для диагностики скорости)</label>
-    <div class="muted" style="margin-top:6px;">Доп-ставки (0 = только первая, N = ещё N сверх). Все три НЕЗАВИСИМЫ — ставка проходит, только если укладывается во ВСЕ:</div>
-    <div class="grid2">
-      <label>Доп в матче<input id="valuePlaceEventExtra" type="number" min="0" step="1" placeholder="0" /></label>
-      <label>Доп в маркете (форы/тоталы/победы)<input id="valuePlaceMarketExtra" type="number" min="0" step="1" placeholder="0" /></label>
-    </div>
-    <label>Дубли (тот же исход)<input id="valuePlaceDupExtra" type="number" min="0" step="1" placeholder="0" /></label>
-    <label class="liverow"><input type="checkbox" id="valueLive" /> <b>⚡ Боевой</b> — реальные ставки (выкл = dry-run)</label>
-    <label class="liverow"><input type="checkbox" id="valuePlace" /> <b>🅱️ Простановка</b> — ставить сигналы на Betano через Octo (нужен octoMode; выкл = только детект)</label>
-    <label class="liverow" style="padding-left:22px;"><input type="checkbox" id="valueRandomTest" /> 🎲 <b>РАНДОМ-ТЕСТ</b> — ставить СЛУЧАЙНЫЕ исходы без фильтра value/вилки (диагностика порезки: «режут за содержимое или за бота»). Ценность считается для лога. Тратит деньги — минусовой режим!</label>
-    <label class="liverow" style="padding-left:22px;"><input type="checkbox" id="valuePlaceRequireArb" /> только дошедшие до <b>вилки</b> (arb&gt;0)</label>
-    <label class="liverow" style="padding-left:22px;"><input type="checkbox" id="valuePlaceMlOnly" /> только <b>победа (ML)</b> — самый надёжный выбор для старта</label>
-    <div class="muted" style="margin-top:6px;">Тумблеры и поля выше — это КОНФИГ: сохраняются, но сессию НЕ запускают. Настрой всё → «Сохранить конфиг» → «Запустить сессию».</div>
-    <div class="row" style="margin-top:8px;"><button id="valueSave">Сохранить конфиг</button> <button id="valueRunBtn">▶ Запустить сессию</button></div>
-    <div class="muted" id="valueResult"></div>
-  </section>
+      <!-- ══════════ BETANO · OCTO ══════════ -->
+      <section class="panel" data-panel="betano">
+        <h2>Betano · Octo</h2>
+        <p class="lead">Профиль Octo, адрес сайта, вход и проверка купона без ставки.</p>
+        <div id="bookers"></div>
+      </section>
 
-  <section class="card">
-    <div class="row">
-      <button id="toggleRun" class="ghost">Пауза / Возобновить</button>
-      <button id="openLogs" class="ghost">Показать логи</button>
+      <!-- ══════════ TELEGRAM ══════════ -->
+      <section class="panel" data-panel="telegram">
+        <h2>Telegram</h2>
+        <p class="lead">Сообщения о поставленных ставках.</p>
+        <div class="card">
+          <h3>Бот</h3>
+          <label class="set">
+            <span class="set-t">Токен бота<small>После сохранения не показывается.</small></span>
+            <input id="tgToken" class="wide" type="text" placeholder="вставь токен бота" autocomplete="off" />
+          </label>
+          <label class="set">
+            <span class="set-t">Chat ID<small>Куда слать: число или -100…</small></span>
+            <input id="tgChat" class="wide" type="text" placeholder="123456789" autocomplete="off" />
+          </label>
+          <div class="body">
+            <div class="row">
+              <button id="tgSave">Сохранить</button>
+              <button id="tgTest" class="ghost">Отправить тест</button>
+              <span class="muted" id="tgResult" style="margin:0;"></span>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
-    <div class="muted">Если приложение крашится — нажми «Показать логи», пришли мне файл <b>main.log</b>.</div>
-  </section>
+  </div>
 
+  <!-- НИЖНЯЯ СТРОКА: что только что произошло -->
+  <footer class="foot">
+    <span id="valueResult"></span>
+    <span id="saveHint"></span>
+    <span class="spacer"></span>
+    <button id="valueSave" class="ghost">Сохранить сейчас</button>
+  </footer>
+
+  <script src="ui.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

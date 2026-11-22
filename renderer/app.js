@@ -2,6 +2,42 @@
 const $ = (id) => document.getElementById(id);
 const MARGIN_SPORTS = [3, 1, 29, 30, 31, 32, 4, 5, 9]; // sportType с пер-спорт фильтром маржи в панели (id инпутов margin_<t>)
 
+// Раздел «Спорт и исходы». Третий элемент — режим, в котором пункт имеет смысл (нет — в обоих).
+const BET_SPORTS = [[1, "Футбол"], [3, "Теннис"], [4, "Баскетбол"], [2, "Хоккей"], [11, "Ам. футбол"], [29, "CS"], [30, "Dota"], [31, "LoL", "live"], [32, "Valorant", "live"]];
+const BET_OUTCOMES = [["win", "Победа"], ["draw", "Ничья", "prematch"], ["dc", "Двойной шанс", "prematch"], ["dnb", "Фора 0", "prematch"], ["hc", "Фора"], ["tot", "Тотал"], ["tt", "Тотал команды или игрока", "prematch"]];
+// Галочки одной группы: пустой сохранённый список = включено всё. Последнюю галочку снять нельзя (иначе «пусто» = «всё»).
+function renderChecks(rootId, items, saved) {
+  const root = $(rootId); if (!root) return;
+  root.innerHTML = "";
+  const all = !Array.isArray(saved) || !saved.length;
+  for (const [val, label, mode] of items) {
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = String(val);
+    cb.checked = all || saved.map(String).includes(String(val));
+    cb.addEventListener("change", (e) => {
+      if (![...root.querySelectorAll("input")].some((x) => x.checked)) {
+        cb.checked = true; e.stopPropagation();
+        if ($("valueResult")) $("valueResult").textContent = "Нужна хотя бы одна галочка";
+      }
+    });
+    const lab = document.createElement("label"); lab.className = "chk"; if (mode) lab.dataset.mode = mode;
+    lab.append(cb, document.createTextNode(label));
+    root.append(lab);
+  }
+}
+// Что отмечено в группе: [] — если отмечено всё (значит «без ограничения»), иначе список значений.
+function readChecks(rootId, asNumber) {
+  const root = $(rootId); if (!root) return null;
+  const boxes = [...root.querySelectorAll("input")];
+  if (boxes.every((x) => x.checked)) return [];
+  return boxes.filter((x) => x.checked).map((x) => (asNumber ? Number(x.value) : x.value));
+}
+// Показываем настройки только включённого режима (в разметке помечены data-mode="live" / "prematch").
+function applyMode() {
+  const pm = !!($("prematchMode") && $("prematchMode").checked);
+  document.body.classList.toggle("mode-prematch", pm);
+  document.body.classList.toggle("mode-live", !pm);
+}
+
 // Версия приложения в шапке — чтобы точно видеть, что сейчас в работе (через IPC).
 try { if (window.api && window.api.getVersion) window.api.getVersion().then((v) => { if (v && $("appVer")) $("appVer").textContent = "v" + v; }).catch(() => {}); } catch (e) { /* ignore */ }
 
@@ -34,17 +70,28 @@ function renderStatus(s) {
     if ($("valuePlaceDupExtra")) $("valuePlaceDupExtra").value = v.valuePlaceDupExtra != null ? v.valuePlaceDupExtra : 0;
     if ($("valuePlaceEventExtra")) $("valuePlaceEventExtra").value = v.valuePlaceEventExtra != null ? v.valuePlaceEventExtra : 0;
     if ($("valuePlaceMarketExtra")) $("valuePlaceMarketExtra").value = v.valuePlaceMarketExtra != null ? v.valuePlaceMarketExtra : 0;
-    $("valueLive").checked = !!v.valueLive;
-    if ($("valuePlace")) $("valuePlace").checked = !!v.valuePlace;
+    // Dry-run или Боевой — всегда включён ровно один. В настройках: valuePlace (ходить на сайт) всегда true,
+    // valueLive (отправлять ставку) — только в боевом.
+    const liveOn = !!v.valueLive && !!v.valuePlace;
+    if ($("modeLive")) $("modeLive").checked = liveOn;
+    if ($("modeDry")) $("modeDry").checked = !liveOn;
     if ($("valueRandomTest")) $("valueRandomTest").checked = !!v.valueRandomTest;
-    if ($("valuePlaceRequireArb")) $("valuePlaceRequireArb").checked = !!v.valuePlaceRequireArb;
-    if ($("valuePlaceMlOnly")) $("valuePlaceMlOnly").checked = Array.isArray(v.valuePlaceKinds) && v.valuePlaceKinds.length === 1 && v.valuePlaceKinds[0] === "ML";
     $("bettingcoKey").value = v.bettingcoKey || "";   // ключ Betano-фида (bettingco), показываем целиком (его машина)
-    // ПРЕМАТЧ: тумблер, ключ, порог вилки (доля → %), сетка оценки
+    // ПРЕМАТЧ: тумблер, ключ, вилка от и до (доля → %)
     if ($("prematchMode")) $("prematchMode").checked = !!v.prematchMode;
     if ($("prematchKey")) $("prematchKey").value = v.prematchKey || "";
     if ($("prematchMinArb")) $("prematchMinArb").value = Math.round((v.prematchMinArb != null ? v.prematchMinArb : 0.005) * 10000) / 100;
-    if ($("prematchGridSec")) $("prematchGridSec").value = v.prematchGridSec != null ? v.prematchGridSec : 120;
+    if ($("prematchMaxArb")) $("prematchMaxArb").value = v.prematchMaxArb ? Math.round(v.prematchMaxArb * 10000) / 100 : "";
+    // Спорт и исходы
+    renderChecks("betSports", BET_SPORTS, v.betSports);
+    // лайв хранит выбор рынков в valuePlaceKinds (ML/TOTAL/SPREAD) — если он был сужен, показываем это в галочках
+    const kindToGroup = { ML: "win", TOTAL: "tot", SPREAD: "hc" };
+    const fromKinds = Array.isArray(v.valuePlaceKinds) && v.valuePlaceKinds.length ? v.valuePlaceKinds.map((k) => kindToGroup[k]).filter(Boolean) : null;
+    renderChecks("betOutcomes", BET_OUTCOMES, (Array.isArray(v.betOutcomes) && v.betOutcomes.length) ? v.betOutcomes
+      : fromKinds ? BET_OUTCOMES.map((o) => o[0]).filter((g) => !["win", "tot", "hc"].includes(g) || fromKinds.includes(g)) : []);
+    if ($("betFull")) $("betFull").checked = v.betFull !== false;
+    if ($("betParts")) $("betParts").checked = v.betParts !== false;
+    applyMode();
     valueSportsState = (v.valueSports && v.valueSports.length) ? v.valueSports.map((x) => ({ ...x })) : [];
     valueMarketsState = Array.isArray(v.valueMarkets) ? v.valueMarkets.slice() : [];
     renderValueSports();
@@ -62,22 +109,24 @@ if ($("openLogs")) $("openLogs").onclick = () => window.api.openLogs();
 
 // ── Статистика value в шапке (push из main каждый тик/скан) ───────────────────
 if (window.api.onValuePulse) window.api.onValuePulse((p) => {
-  const el = $("valuePulse"); if (!el || !p) return;
+  const chip = $("pulseChip"), main = $("pulseMain"), sub = $("pulseSub");
+  if (!chip || !main || !sub || !p) return;
   const t = new Date(p.at || Date.now()).toLocaleTimeString();
-  let s, color;
-  if (!p.on) { color = "#7f8c8d"; s = "🎯 value: выключен"; }
-  else if (p.error) { color = "#c0392b"; s = "🔴 value ОШИБКА: " + p.error; }
-  else if (p.scanning) { color = "#2980b9"; s = "⚙️ сканирую кэфы…"; }
+  // Шапка: метка состояния · главная строка (сколько сигналов) · вторая строка (подробности, время обновления)
+  let cls = "", label, text, extra = "";
+  if (!p.on) { label = "выключен"; text = "Сессия не запущена"; }
+  else if (p.error) { cls = "bad"; label = "ошибка"; text = p.error; extra = "в " + t; }
+  else if (p.scanning) { cls = "busy"; label = "загрузка"; text = p.note || "читаю коэффициенты…"; extra = "в " + t; }
   else {
-    color = p.live ? "#1a9e4b" : "#e67e22";
-    s = "🎯 value " + (p.live ? "⚡БОЕВОЙ" : "dry-run") + " · кандидатов " + (p.candidates != null ? p.candidates : 0) +
-      (p.top != null ? " (топ +" + (p.top * 100).toFixed(1) + "%)" : "") +
-      " · поставлено " + (p.placedToday || 0) + "/" + (p.max || 0) + (p.note ? " · " + p.note : "");
-    if (p.lastBet) s += "\nпоследняя: " + p.lastBet;
+    cls = p.live ? "ok" : "warn"; label = p.live ? "боевой" : "dry-run";
+    const n = p.candidates != null ? p.candidates : 0;
+    text = "Сигналов сейчас: " + n + (p.top != null ? " · лучший +" + (p.top * 100).toFixed(1) + "%" : "") +
+      " · " + (p.max ? "поставлено " + (p.placedToday || 0) + " из " + p.max : "попыток " + (p.placedToday || 0));
+    extra = [p.note, p.lastBet ? "лучший: " + p.lastBet : "", "обновлено " + t].filter(Boolean).join(" · ");
   }
-  el.style.color = color;
-  el.style.whiteSpace = "pre-wrap";
-  el.textContent = "value " + t + ": " + s;
+  chip.className = "chip" + (cls ? " " + cls : "");
+  chip.textContent = label; main.textContent = text; sub.textContent = extra;
+  main.title = text; sub.title = extra; // длинный текст обрезается — полный виден при наведении
 });
 
 // ── Telegram: сохранение настроек + тест ──────────────────────────────────────
@@ -182,13 +231,17 @@ function saveValue() {
     valuePlaceMarketExtra: $("valuePlaceMarketExtra") ? (Number($("valuePlaceMarketExtra").value) || 0) : 0,
     valueOddsMin: Number($("valueOddsMin").value) || 0,
     valueOddsMax: Number($("valueOddsMax").value) || 0,
-    valueLive: $("valueLive").checked,
-    valuePlace: $("valuePlace") ? $("valuePlace").checked : false,
+    valueLive: !!($("modeLive") && $("modeLive").checked), // Боевой
+    valuePlace: true,                                        // бот всегда ходит на сайт: либо dry-run, либо боевой
     valueRandomTest: $("valueRandomTest") ? $("valueRandomTest").checked : false,
-    valuePlaceRequireArb: $("valuePlaceRequireArb") ? $("valuePlaceRequireArb").checked : false,
     octoBlockResources: $("octoBlockResources") ? $("octoBlockResources").checked : true, // блок live-видео (экономия прокси; применяется при след. подключении Octo)
     valueMarginBySport: (() => { const m = {}; for (const t of MARGIN_SPORTS) { const el = $("margin_" + t); const n = el ? Number(el.value) : 0; if (n > 0) m[t] = n / 100; } return m; })(), // % → доля; пусто = без фильтра
-    valuePlaceKinds: ($("valuePlaceMlOnly") && $("valuePlaceMlOnly").checked) ? ["ML"] : [],
+    // лайв понимает три рынка: победа (ML), тотал (TOTAL), фора (SPREAD). Все три отмечены — без ограничения.
+    valuePlaceKinds: (() => {
+      const on = readChecks("betOutcomes"); if (!on || !on.length) return [];
+      const kinds = [["win", "ML"], ["tot", "TOTAL"], ["hc", "SPREAD"]].filter(([g]) => on.includes(g)).map(([, k]) => k);
+      return kinds.length === 3 ? [] : kinds.length ? kinds : ["НЕТ"]; // «НЕТ» — ни один из рынков лайва не выбран → лайв ничего не берёт
+    })(),
     valueSports: valueSportsState.map((s) => ({ key: s.key, name: s.name, oa: s.oa, ps: s.ps, on: !!s.on, exclude: Array.isArray(s.exclude) ? s.exclude : [] })),
     valueMarkets: valueMarketsState.slice(),
   };
@@ -196,7 +249,12 @@ function saveValue() {
   // ПРЕМАТЧ
   if ($("prematchMode")) patch.prematchMode = $("prematchMode").checked;
   if ($("prematchMinArb")) patch.prematchMinArb = Math.max(0, Number($("prematchMinArb").value) || 0) / 100; // % → доля
-  if ($("prematchGridSec")) patch.prematchGridSec = Number($("prematchGridSec").value) || 120;
+  if ($("prematchMaxArb")) patch.prematchMaxArb = Math.max(0, Number($("prematchMaxArb").value) || 0) / 100; // пусто = без потолка
+  // Спорт и исходы (пустой список = включено всё)
+  const bs = readChecks("betSports", true); if (bs) patch.betSports = bs;
+  const bo = readChecks("betOutcomes"); if (bo) patch.betOutcomes = bo;
+  if ($("betFull")) patch.betFull = $("betFull").checked;
+  if ($("betParts")) patch.betParts = $("betParts").checked;
   const pk = $("prematchKey") ? $("prematchKey").value.trim() : ""; if (pk) patch.prematchKey = pk;
   return window.api.saveSettings(patch); // поле НЕ очищаем — ключ остаётся виден
 }
@@ -205,12 +263,18 @@ if ($("valueSave")) $("valueSave").onclick = async () => {
   catch (e) { $("valueResult").textContent = "⚠️ " + e.message; }
 };
 // тумблеры value — это КОНФИГ: сохраняем сразу, но движок НЕ трогаем (сессия — отдельной кнопкой ниже).
-if ($("valueLive")) $("valueLive").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valueLive").checked ? "⚡ боевой ВКЛ (применится к идущей сессии)" : "dry-run"; }).catch(() => {});
-if ($("valuePlace")) $("valuePlace").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valuePlace").checked ? "🅱️ простановка ВКЛ" : "простановка выкл"; }).catch(() => {});
+// Dry-run или Боевой — один выбор из двух. Перед включением боевого переспрашиваем: это реальные деньги.
+if ($("modeLive")) $("modeLive").onchange = () => {
+  if ($("modeLive").checked && !confirm("Включить БОЕВОЙ режим? Бот начнёт отправлять реальные ставки.")) { $("modeDry").checked = true; return; }
+  saveValue().then(() => { $("valueResult").textContent = "Боевой режим включён — ставки отправляются"; }).catch(() => {});
+};
+if ($("modeDry")) $("modeDry").onchange = () => saveValue().then(() => { $("valueResult").textContent = "Dry-run включён — ставки не отправляются"; }).catch(() => {});
+// «весь матч» и «части матча»: хотя бы одно должно остаться
+for (const id of ["betFull", "betParts"]) if ($(id)) $(id).addEventListener("change", () => {
+  if (!$("betFull").checked && !$("betParts").checked) { $(id).checked = true; $("valueResult").textContent = "Нужен хотя бы один отрезок"; }
+});
 if ($("valueRandomTest")) $("valueRandomTest").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("valueRandomTest").checked ? "🎲 РАНДОМ-ТЕСТ ВКЛ — ставим случайное (эксперимент)" : "рандом-тест выкл"; }).catch(() => {});
-if ($("valuePlaceRequireArb")) $("valuePlaceRequireArb").onchange = () => saveValue().catch(() => {});
-if ($("prematchMode")) $("prematchMode").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("prematchMode").checked ? "🕒 ПРЕМАТЧ включён — применится при запуске сессии (простановка только dry-run)" : "прематч выключен — сессия пойдёт по лайву"; }).catch(() => {});
-if ($("valuePlaceMlOnly")) $("valuePlaceMlOnly").onchange = () => saveValue().catch(() => {});
+if ($("prematchMode")) $("prematchMode").onchange = () => { applyMode(); saveValue().then(() => { $("valueResult").textContent = $("prematchMode").checked ? "Прематч включён — применится при запуске сессии (ставки не отправляются)" : "Прематч выключен — сессия пойдёт по лайву"; }).catch(() => {}); };
 if ($("octoBlockResources")) $("octoBlockResources").onchange = () => saveValue().then(() => { $("valueResult").textContent = $("octoBlockResources").checked ? "видео-блок ВКЛ (применится при след. подключении Octo)" : "видео-блок ВЫКЛ (перезапусти Octo-окно)"; }).catch(() => {});
 // АВТО-СОХРАНЕНИЕ ВСЕЙ СЕКЦИИ: любое изменение поля/галочки в карточке value сохраняет конфиг сразу —
 // владелец терял настройки, меняя поля без «Сохранить конфиг» и перезапуская приложение.
@@ -228,7 +292,7 @@ if ($("octoBlockResources")) $("octoBlockResources").onchange = () => saveValue(
 let valueSessionOn = false;
 function setRunBtn(on) {
   valueSessionOn = !!on;
-  const b = $("valueRunBtn"); if (b) b.textContent = on ? "⏹ Остановить сессию" : "▶ Запустить сессию";
+  const b = $("valueRunBtn"); if (b) { b.textContent = on ? "⏹ Остановить сессию" : "▶ Запустить сессию"; b.classList.toggle("stop", !!on); }
 }
 if ($("valueRunBtn")) $("valueRunBtn").onclick = async () => {
   const b = $("valueRunBtn"); if (b) b.disabled = true;
@@ -334,14 +398,15 @@ async function renderBookers() {
         } catch (e) { octoStatus.style.color = "#c0392b"; octoStatus.textContent = "⚠️ " + e.message; }
       } });
       const octoBox = el("div", { className: "subbox" }, [
-        el("div", { className: "muted", textContent: "Octo Browser (антидетект) — прокси / UA / отпечаток внутри профиля. Если Octo закрыт — бот запустит его сам." }),
+        el("div", { className: "box-t", textContent: "Профиль Octo" }),
+        el("div", { className: "muted", textContent: "Прокси и отпечаток живут внутри профиля. Закрытый Octo бот запустит сам." }),
         el("label", { textContent: "UUID профиля Octo (Betano)" }, [pidInput]),
         el("label", { textContent: "Адрес Octo Local API" }, [apiInput]),
         el("label", { textContent: "Путь к Octo.exe (необязательно)" }, [exeInput]),
         octoStatus,
       ]);
       const loginBox = el("div", { className: "subbox" }, [
-        el("div", { className: "muted", textContent: "Аккаунт Betano (логин / пароль)" }),
+        el("div", { className: "box-t", textContent: "Аккаунт Betano" }),
         el("div", { className: "grid2" }, [
           field("Логин", b.login.user || "", (v) => (b.login.user = v)),
           field("Пароль", b.login.pass || "", (v) => (b.login.pass = v)),
@@ -350,12 +415,15 @@ async function renderBookers() {
       // Домен Betano (страна аккаунта): бот открывает логин И события на этом адресе. id событий общий во всех
       // странах, поэтому смена домена = переезд аккаунта (напр. .bg → lat.betano.com) без правок кода.
       const domainBox = el("div", { className: "subbox" }, [
-        el("div", { className: "muted", textContent: "Домен Betano (страна аккаунта): напр. https://www.betano.bg/ или https://lat.betano.com/ — сюда бот заходит на логин и события" }),
+        el("div", { className: "box-t", textContent: "Сайт Betano" }),
+        el("div", { className: "muted", textContent: "Домен твоего аккаунта, например https://lat.betano.com/ — на нём бот открывает события." }),
         field("Адрес Betano", b.url || "", (v) => (b.url = v)),
       ]);
       const stakeBox = el("input", { type: "text", placeholder: "сумма" }); stakeBox.style.maxWidth = "120px";
-      const dryResult = el("div", { className: "muted", textContent: "открой событие (value-цикл или вручную в Octo) → впиши сумму → тест" });
-      const dryRow = el("div", {}, [
+      const dryResult = el("div", { className: "muted", textContent: "" });
+      const dryRow = el("div", { className: "subbox" }, [
+        el("div", { className: "box-t", textContent: "Проверка купона" }),
+        el("div", { className: "muted", textContent: "Открой событие в Octo, впиши сумму — бот выберет исход и заполнит купон, ставку не отправит." }),
         el("div", { className: "row" }, [
           stakeBox,
           el("button", { className: "ghost", textContent: "Тест (dry-run)", onclick: async () => {
@@ -372,7 +440,7 @@ async function renderBookers() {
       ]);
       const card = el("details", { className: "booker", open: true }, [
         el("summary", {}, [el("b", { textContent: (b.name || b.id) + " · Octo" })]),
-        enterOcto, octoBox, domainBox, loginBox, dryRow,
+        el("div", { className: "row" }, [enterOcto]), octoBox, domainBox, loginBox, dryRow,
       ]);
       root.append(card);
       return; // карточку Betano собрали — общий (Electron) рендер пропускаем
